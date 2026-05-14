@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 20)
 
 add_executable(CSE305_project
         main.cpp
+        include/VisitedSet.hpp
+        include/RecursivelyEnumeratedSet.hpp
+        include/Master.hpp
+        include/Worker.hpp
 )
 
 target_include_directories(CSE305_project PRIVATE
