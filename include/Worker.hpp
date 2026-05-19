@@ -34,7 +34,7 @@ private:
     bool active;
 
     std::mutex tasks_lock;
-public: // FIXME make map_reduce private
+
     void map_reduce(const U& task) {
         U curr_task = task;
 
@@ -54,15 +54,13 @@ public: // FIXME make map_reduce private
             LogTrace("Current result is %i", result);
 
             // compute successors
-            std::vector<U> unexplored_successors = successors(curr_task);
+            std::vector<U> unexplored_successors = 
+                master->get_visited()->extend(successors(curr_task));
 
             // log
             std::string s = "";
             for (U elt : unexplored_successors) s += std::to_string(elt) + " ";
             LogTrace("Computed successors %s", s.data());
-
-            // std::vector<U> unexplored_successors =
-            //     master->get_visited_set().extend(successors(curr_task));
 
             if (unexplored_successors.size() > 0) {
                 curr_task = unexplored_successors.back();
@@ -80,24 +78,25 @@ public: // FIXME make map_reduce private
         LogInfo("MapReduce computation over, remaining tasks are %s", s.data());
     }
 
-//     std::optional<U> steal() {
-//         size_t victim_id = (my_id + 1) % num_workers;
-//         while (victim_id != my_id) {
-//             std::optional<U> maybe_task =
-//                 master->get_workers()[victim_id]->take_task();
-//             if (maybe_task.has_value()) return maybe_task;
+    std::optional<U> steal() {
+        // size_t victim_id = (my_id + 1) % num_workers;
+        // while (victim_id != my_id) {
+        //     std::optional<U> maybe_task =
+        //         master->get_workers()[victim_id]->take_task();
+        //     if (maybe_task.has_value()) return maybe_task;
 
-//             victim_id = (victim_id + 1) % num_workers;
-//         }
-//         return std::nullopt;
-//     }
+        //     victim_id = (victim_id + 1) % num_workers;
+        // }
+
+        return std::nullopt;
+    }
 
     void add_tasks(std::vector<U> new_tasks) {
         std::lock_guard<std::mutex> tl(tasks_lock);
         for (U task : new_tasks) tasks.push_back(task);
     }
 
-//public:
+public:
     Worker(
         size_t my_id_,
         Master<U, A> *master_,
@@ -123,46 +122,57 @@ public: // FIXME make map_reduce private
     std::vector<U> get_tasks() {
         return tasks;
     }
+    A get_result() {
+        return result;
+    }
 
     // TODO establish all getters worker needs from master
 
-//     void run() {
-//         active = true;
-//         // loop until shutdown or done
-//         while (active) {
-//             // try to take a node or steal
-//             std::optional<U> maybe_task = take_task();
-//             if (!maybe_task.has_value()) maybe_task = steal;
+    void run() { // TODO make sure it is only called once
+        LogInfo("Starting worker %i", my_id);
 
-//             if (maybe_task.has_value()) {
-//                 // perform map_reduce
-//                 U task = maybe_task.value();
-//                 map_reduce(task);
-//             } else active = false; // no tasks left
-//         }
-//         // send result to master and shut down
-//         // TODO allow master to manually stop the worker by setting active=false
-//         master->receive_partial_result(result);
+        active = true;
+        // loop until shutdown or done
+        while (active) {
+            // try to take a node or steal
+            std::optional<U> maybe_task = take_task();
+            if (!maybe_task.has_value()) maybe_task = steal();
 
-//         // TODO shut down properly
+            if (maybe_task.has_value()) {
+                // perform map_reduce
+                U task = maybe_task.value();
+                map_reduce(task);
+            } else active = false; // no tasks left
+        }
+        LogInfo(
+            "Stopping worker %i with %i tasks remaining, and partial result %s",
+            my_id, tasks.size(), std::to_string(result).data()
+        );
 
-//         master->worker_finish();
-//     }
+        // send result to master and shut down
+        // TODO allow master to manually stop the worker by setting active=false
+        // master->receive_partial_result(result);
 
-//     std::optional<U>  take_task() {
-//         std::lock_guard<std::mutex> tl(tasks_lock);
-//         if (tasks.size() > 0) {
-//             U next_task = tasks.back();
-//             tasks.pop_back();
-//             return next_task;
-//         }
-//         return std::nullopt;
-//     }
+        // // TODO shut down properly
 
-//     bool is_active() {
-//         // TODO thread safety (if master can change active for abort)
-//         return active;
-//     }
+        // master->worker_finish();
+    }
+
+    std::optional<U>  take_task() {
+        std::lock_guard<std::mutex> tl(tasks_lock);
+        if (tasks.size() > 0) {
+            U next_task = tasks.back();
+            tasks.pop_back();
+            return next_task;
+        }
+        return std::nullopt;
+    }
+
+    bool is_active() {
+        // TODO thread safety (if master can change active for abort)
+        return active;
+    }
+
 };
 
 #endif //WORKER_HPP

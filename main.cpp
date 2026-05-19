@@ -51,40 +51,44 @@ void manual_worker_test(size_t num_workers) {
     auto cardinal_map = [](const int& x){ return 1; };
     auto cardinal_reduce = [](const int& x, const int& y){ return x + y; };
     int cardinal_reduce_init = 0;
+    int cardinal_result = 12;
     auto even_count_map = [](const int& x){ return 1 - x % 2; };
     auto even_count_reduce = [](const int& x, const int& y){ return x + y; };
     int even_count_reduce_init = 0;
+    int even_count_result = 6;
     auto max_map = [](const int& x){ return x; };
     auto max_reduce = [](const int& x, const int& y){
         if (x > y) return x;
         return y;
     };
     int max_reduce_init = 0;
+    int max_result = 15;
     auto all_even_map = [](const int& x){
         if (x % 2 == 0) return true;
         return false;
     };
     auto all_even_reduce = [](const bool& x, const bool& y){ return x && y; };
     bool all_even_reduce_init = true;
+    bool all_even_result = false;
 
     // useful seeds and successors
-    // linear combinations of 2 and 3 up to 15
-    std::vector<int> combs23_seeds = {0};
-    auto combs23_successors = [](const int& x){
+    // linear combinations of 3 and 5 up to 15
+    std::vector<int> combs35_seeds = {0};
+    auto combs35_successors = [](const int& x){
         std::vector<int> res = {};
+        if (x + 5 <= 15) res.push_back(x + 5);
         if (x + 3 <= 15) res.push_back(x + 3);
-        if (x + 2 <= 15) res.push_back(x + 2);
         return res;
     };
 
     // create a dummy master
     // types: U = int; A = int
-    std::vector<int> seeds = combs23_seeds;
+    std::vector<int> seeds = combs35_seeds;
     int reduce_init = 0;
     Master<int, int> *master = new Master<int, int>(
         num_workers,
         seeds,
-        combs23_successors,
+        combs35_successors,
         cardinal_map,
         cardinal_reduce,
         cardinal_reduce_init
@@ -101,8 +105,10 @@ void manual_worker_test(size_t num_workers) {
         workers[i] = new Worker<int, int>(i, master, tasks);
     }
 
-    if (workers[0]->get_tasks().size() > 0) {
-        int task = workers[0]->get_tasks()[0];
-        workers[0]->map_reduce(task);
-    }
+    // if (workers[0]->get_tasks().size() > 0) {
+    //     int task = workers[0]->get_tasks()[0];
+    //     workers[0]->map_reduce(task);
+    // }
+    workers[0]->run();
+    LogInfo("Result -- expected %i and got %i", cardinal_result, workers[0]->get_result());
 }
