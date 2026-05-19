@@ -40,18 +40,13 @@ private:
 
         // log
         LogInfo(
-            "Worker %i starts map_reduce on %s",
+            "[Worker %i] Starting map_reduce on %s",
             my_id, std::to_string(curr_task).data()
         ); // FIXME assumes U can be converted to str
 
         while (true) {
             A mapped_val = map_function(curr_task);
-            LogTrace(
-                "Mapped %i to %i, now will perform reduce with %i",
-                curr_task, mapped_val, result
-            );
             result = reduce_function(result, mapped_val);
-            LogTrace("Current result is %i", result);
 
             // compute successors
             std::vector<U> unexplored_successors = 
@@ -60,7 +55,10 @@ private:
             // log
             std::string s = "";
             for (U elt : unexplored_successors) s += std::to_string(elt) + " ";
-            LogTrace("Computed successors %s", s.data());
+            LogTrace(
+                "[Worker %i] Mapped %i to %i, reduced to %i, got successors { %s}",
+                my_id, curr_task, mapped_val, result, s.data()
+            ); // FIXME assumes U is a number
 
             if (unexplored_successors.size() > 0) {
                 curr_task = unexplored_successors.back();
@@ -75,7 +73,10 @@ private:
         // log
         std::string s = "";
         for (U elt : tasks) s += std::to_string(elt) + " ";
-        LogInfo("MapReduce computation over, remaining tasks are %s", s.data());
+        LogInfo(
+            "[Worker %i] MapReduce computation over, remaining tasks are { %s}",
+            my_id, s.data()
+        );
     }
 
     std::optional<U> steal() {
@@ -129,7 +130,7 @@ public:
     // TODO establish all getters worker needs from master
 
     void run() { // TODO make sure it is only called once
-        LogInfo("Starting worker %i", my_id);
+        LogInfo("[Worker %i] Starting...", my_id);
 
         active = true;
         // loop until shutdown or done
@@ -145,7 +146,7 @@ public:
             } else active = false; // no tasks left
         }
         LogInfo(
-            "Stopping worker %i with %i tasks remaining, and partial result %s",
+            "[Worker %i] Stopping with %i tasks remaining, and partial result %s",
             my_id, tasks.size(), std::to_string(result).data()
         );
 

@@ -11,8 +11,8 @@
 #define LogInfo(...) ((void)0)
 #endif
 
-#define MIN_WORKERS 1
-#define MAX_WORKERS 1
+#define MIN_WORKERS 2
+#define MAX_WORKERS 2
 
 void incorrect_usage() {
     LogInfo("Incorrect usage");
@@ -73,7 +73,7 @@ void manual_worker_test(size_t num_workers) {
 
     // useful seeds and successors
     // linear combinations of 3 and 5 up to 15
-    std::vector<int> combs35_seeds = {0};
+    std::vector<int> combs35_seeds = {0, 10};
     auto combs35_successors = [](const int& x){
         std::vector<int> res = {};
         if (x + 5 <= 15) res.push_back(x + 5);
@@ -95,20 +95,28 @@ void manual_worker_test(size_t num_workers) {
     );
 
     // manually create workers
-    std::vector<Worker<int, int>*> workers(num_workers);
+    std::vector<std::unique_ptr<Worker<int, int>>> workers(num_workers);
     for (size_t i = 0; i < num_workers; ++i) {
         std::vector<int> tasks = {};
         for (int j = i; j < seeds.size(); j += num_workers) {
             tasks.push_back(seeds[j]);
         }
 
-        workers[i] = new Worker<int, int>(i, master, tasks);
+        workers[i] = std::make_unique<Worker<int, int>>(i, master, tasks);
     }
 
-    // if (workers[0]->get_tasks().size() > 0) {
-    //     int task = workers[0]->get_tasks()[0];
-    //     workers[0]->map_reduce(task);
-    // }
-    workers[0]->run();
-    LogInfo("Result -- expected %i and got %i", cardinal_result, workers[0]->get_result());
+    // // 1 worker
+    // workers[0]->run();
+    // LogInfo("Result -- expected %i and got %i", cardinal_result, workers[0]->get_result());
+
+    // 2 workers
+    std::thread A(&Worker<int, int>::run, workers[0].get());
+    std::thread B(&Worker<int, int>::run, workers[1].get());
+    A.join();
+    B.join();
+    int combined_res = master->get_reduce_function()(
+        workers[0]->get_result(),
+        workers[1]->get_result()
+    );
+    LogInfo("Result -- expected %i and got %i", cardinal_result, combined_res);
 }
