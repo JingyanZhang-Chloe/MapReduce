@@ -1,4 +1,8 @@
-// stub
+//
+// Created by $JingyanZhang on 14/05/2026.
+//
+
+// Coase gain version to store all visited set using unordered set
 
 #ifndef VISITEDSET_HPP
 #define VISITEDSET_HPP

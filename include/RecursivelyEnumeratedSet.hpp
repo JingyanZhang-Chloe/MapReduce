@@ -5,12 +5,16 @@
 #ifndef RECURSIVELYENUMERATEDSET_HPP
 #define RECURSIVELYENUMERATEDSET_HPP
 
-#include<vector>
+#include <vector>
 #include <functional>
 #include <unordered_set>
 
 template<typename U, typename A>
 class RESetMapReduce {
+private:
+    std::vector<U> seeds;
+    std::function<std::vector<U>(const U&)> successors;
+
 public:
     //constructor to make the RE set
     RESetMapReduce(std::vector<U> seeds_, std::function<std::vector<U>(const U&)> successors_) {
@@ -70,10 +74,6 @@ public:
 
         return result;
     }
-
-private:
-    std::vector<U> seeds;
-    std::function<std::vector<U>(const U&)> successors;
 };
 
 #endif //RECURSIVELYENUMERATEDSET_HPP
