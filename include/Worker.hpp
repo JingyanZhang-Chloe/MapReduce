@@ -50,7 +50,7 @@ private:
 
             // compute successors
             std::vector<U> unexplored_successors = 
-                master->get_visited()->extend(successors(curr_task));
+                master->get_visited_set().extend(successors(curr_task));
 
             // log
             std::string s = "";

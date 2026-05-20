@@ -125,7 +125,7 @@ public:
           map_function(map_function_),
           reduce_function(reduce_function_),
           reduce_init(reduce_init_),
-          visited(),
+          visited(VisitedSet(seeds_)),
           num_active_workers(0),
           shutdown_request(false),
           has_error(false)
