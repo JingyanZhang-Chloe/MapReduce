@@ -152,11 +152,11 @@ public:
 
         // send result to master and shut down
         // TODO allow master to manually stop the worker by setting active=false
-        // master->receive_partial_result(result);
+        master->receive_partial_result(std::ref(result));
 
         // // TODO shut down properly
 
-        // master->worker_finish();
+        master->worker_finish();
     }
 
     std::optional<U>  take_task() {
