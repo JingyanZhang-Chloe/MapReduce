@@ -3,15 +3,19 @@ project(CSE305_project)
 
 set(CMAKE_CXX_STANDARD 20)
 
+if(NO_LOGS)
+    add_compile_definitions(NO_LOGS)
+endif()
+
 add_executable(CSE305_project
         main.cpp
-        include/VisitedSet.hpp
-        include/RecursivelyEnumeratedSet.hpp
-        include/Master.hpp
-        include/Worker.hpp
+        src/Master.cpp
+        src/Worker.cpp
+        src/VisitedSet.cpp
+        src/RecursivelyEnumeratedSet.cpp
 )
 
 target_include_directories(CSE305_project PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/simple-logger/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/simple-cpp-logger/include
 )
