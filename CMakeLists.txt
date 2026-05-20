@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.28)
+cmake_minimum_required(VERSION 3.20)
 project(CSE305_project)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -13,4 +13,5 @@ add_executable(CSE305_project
 
 target_include_directories(CSE305_project PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/simple-logger/include
 )

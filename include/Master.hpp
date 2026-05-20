@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <mutex>
 #include <memory>
+#include <iostream>
 
 #include "VisitedSet.hpp"
 #include "Worker.hpp"
@@ -25,7 +26,6 @@ private:
     size_t num_workers;
 
     // TODO: Check if this should be passed separately or by RecursivelyEnumeratedSet,
-    // TODO: Also check with Worker should we pass to Worker or through getter functions
     std::vector<U> seeds;
     std::function<std::vector<U>(const U&)> successors;
 
@@ -85,6 +85,7 @@ private:
     }
 
     void join_workers() {
+        // TODO : Manually shut down by setting the workers field to false
         for (std::thread& worker_thread : worker_threads) {
             if (worker_thread.joinable()) {
                 worker_thread.join();
@@ -167,18 +168,34 @@ public:
         }
     }
 
-    A get_reduce_init() {
-        std::lock_guard<std::mutex> guard(mutex);
-        return reduce_init;
-    }
-
     bool should_shutdown() {
         std::lock_guard<std::mutex> guard(mutex);
         return shutdown_request;
     }
 
     VisitedSet<U>& get_visited_set() {
-        return visited;
+        // Should we lock it?
+        return std::ref(visited);
+    }
+
+    size_t get_num_workers() {
+        return this->num_workers;
+    }
+
+    std::function<A(const U&)> get_map_function() {
+        return this->map_function;
+    }
+
+    std::function<A(const A&, const A&)> get_reduce_function() {
+        return this->reduce_function;
+    }
+
+    std::function<std::vector<U>(const U&)> get_successors() {
+        return this->successors;
+    }
+
+    A get_reduce_init() {
+        return this->reduce_init;
     }
 
     void report_error(std::string worker_error_message) {
