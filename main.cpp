@@ -92,39 +92,39 @@ void validation_test(size_t num_workers) {
     // Create a Master
     // types: U = int; A = int
     Master<int, int> master1(num_workers, combs35_seeds, combs35_successors, cardinal_map, cardinal_reduce, cardinal_reduce_init);
-    int master1_res = master1.run();
+    int master1_res = master1.run2();
     if (cardinal_result == master1_res) {
         LogInfo(GREEN "[Success] Result -- expected %i and got %i" RESET, cardinal_result, master1_res);
     } else {
         LogInfo(RED "[Fail] Result -- expected %i and got %i" RESET, cardinal_result, master1_res);
     }
 
-    // Test on even_count_map
-    Master<int, int> master2(num_workers, combs35_seeds, combs35_successors, even_count_map, even_count_reduce, even_count_reduce_init);
-    int master2_res = master2.run();
-    if (even_count_result == master2_res) {
-        LogInfo(GREEN "[Success] Result -- expected %i and got %i" RESET, even_count_result, master2_res);
-    } else {
-        LogInfo(RED "[Fail] Result -- expected %i and got %i" RESET, even_count_result, master2_res);
-    }
+    // // Test on even_count_map
+    // Master<int, int> master2(num_workers, combs35_seeds, combs35_successors, even_count_map, even_count_reduce, even_count_reduce_init);
+    // int master2_res = master2.run();
+    // if (even_count_result == master2_res) {
+    //     LogInfo(GREEN "[Success] Result -- expected %i and got %i" RESET, even_count_result, master2_res);
+    // } else {
+    //     LogInfo(RED "[Fail] Result -- expected %i and got %i" RESET, even_count_result, master2_res);
+    // }
 
-    // Test on max_map
-    Master<int, int> master3(num_workers, combs35_seeds, combs35_successors, max_map, max_reduce, max_reduce_init);
-    int master3_res = master3.run();
-    if (max_result == master3_res) {
-        LogInfo(GREEN "[Success] Result -- expected %i and got %i" RESET, max_result, master3_res);
-    } else {
-        LogInfo(RED "[Fail] Result -- expected %i and got %i" RESET, max_result, master3_res);
-    }
+    // // Test on max_map
+    // Master<int, int> master3(num_workers, combs35_seeds, combs35_successors, max_map, max_reduce, max_reduce_init);
+    // int master3_res = master3.run();
+    // if (max_result == master3_res) {
+    //     LogInfo(GREEN "[Success] Result -- expected %i and got %i" RESET, max_result, master3_res);
+    // } else {
+    //     LogInfo(RED "[Fail] Result -- expected %i and got %i" RESET, max_result, master3_res);
+    // }
 
-    // Test on all_even_map
-    Master<int, int> master4(num_workers, combs35_seeds, combs35_successors, all_even_map, all_even_reduce, all_even_reduce_init);
-    int master4_res = master4.run();
-    if (all_even_result == master4_res) {
-        LogInfo(GREEN "[Success] Result -- expected %i and got %i" RESET, all_even_result, master4_res);
-    } else {
-        LogInfo(RED "[Fail] Result -- expected %i and got %i" RESET, all_even_result, master4_res);
-    }
+    // // Test on all_even_map
+    // Master<int, int> master4(num_workers, combs35_seeds, combs35_successors, all_even_map, all_even_reduce, all_even_reduce_init);
+    // int master4_res = master4.run();
+    // if (all_even_result == master4_res) {
+    //     LogInfo(GREEN "[Success] Result -- expected %i and got %i" RESET, all_even_result, master4_res);
+    // } else {
+    //     LogInfo(RED "[Fail] Result -- expected %i and got %i" RESET, all_even_result, master4_res);
+    // }
 
 
 

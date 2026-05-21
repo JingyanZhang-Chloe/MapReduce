@@ -83,7 +83,7 @@ private:
                     worker_id,
                     this,
                     initial_task[worker_id],
-                    this->list_num_tasks[worker_id]
+                    std::ref(this->list_num_tasks[worker_id])
                     )
                 );
         }

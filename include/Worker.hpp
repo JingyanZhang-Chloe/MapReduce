@@ -7,6 +7,7 @@
 #include <functional>
 #include <condition_variable>
 #include <mutex>
+#include <atomic>
 
 #include <Logger.h> // uses simple-cpp-logger
 // control logging: compile with "cmake -DNO_LOGS=ON ../" or "cmake -DNO_LOGS=OFF ../"" (after only "cmake .." is enough)
@@ -35,7 +36,10 @@ private:
     //bool active;
     bool shutdown_request;
 
-    //const int& num_tasks; // TODO add and remove when manipulating tasks
+    std::atomic<int>& num_tasks; // for communication with master
+    std::condition_variable victim_found;
+    size_t provided_victim_id; // my_id if no victim provided
+    std::mutex theft_lock;
 
     std::mutex tasks_lock;
 
@@ -96,6 +100,40 @@ private:
         // );
     }
 
+    std::optional<U> steal2() {
+        while (!shutdown_request) {
+            master->request_steal(my_id);
+
+            LogTrace("[Worker %i] Sent steal request to master", my_id);
+
+            // TODO sleep until master gives us a victim
+            std::unique_lock<std::mutex> tl(theft_lock);
+            victim_found.wait(tl);
+
+            LogTrace("[Worker %i] Woke up with provided id %i", my_id, provided_victim_id);
+
+            if (provided_victim_id == my_id) {
+                LogTrace("[Worker %i] No one to steal from currently", my_id);
+                usleep(500); // to not overwhelm with requests?
+            } else {
+                size_t victim_id = provided_victim_id;
+                provided_victim_id = my_id; // resotore the default value
+
+                // try to steal from the given victim
+                std::optional<U> maybe_task =
+                    master->get_worker(victim_id)->take_task();
+                if (maybe_task.has_value()) {
+                    LogInfo("[Worker %i] Stole task from Worker %i", my_id, victim_id);
+                    return maybe_task;
+                }
+                // if the theft failed, then we send a request again
+                LogTrace("[Worker %i] Steal failed", my_id);
+                //usleep(500);
+            }
+        }
+        return std::nullopt;
+    }
+
     std::optional<U> steal() {
         master->worker_finish();
 
@@ -109,6 +147,7 @@ private:
             }
             std::optional<U> maybe_task =
                 master->get_worker(victim_id)->take_task();
+            
             if (maybe_task.has_value()) {
                 LogInfo("[Worker %i] STOLE task from Worker %i", my_id, victim_id);
                 master->worker_restart();
@@ -124,14 +163,15 @@ private:
     void add_tasks(std::vector<U> new_tasks) {
         std::lock_guard<std::mutex> tl(tasks_lock);
         for (U task : new_tasks) tasks.push_back(task);
+        num_tasks.fetch_add(new_tasks.size());
     }
 
 public:
     Worker(
         size_t my_id_,
         Master<U, A> *master_,
-        std::vector<U> tasks_
-        //const int& num_tasks_
+        std::vector<U> tasks_,
+        std::atomic<int>& num_tasks_
     ):
         my_id(my_id_),
         master(master_),
@@ -141,21 +181,14 @@ public:
         map_function(master_->get_map_function()),
         reduce_function(master_->get_reduce_function()),
         result(master_->get_reduce_init()),
-        shutdown_request(false)
-        //num_tasks(num_tasks_)
+        shutdown_request(false),
+        num_tasks(num_tasks_),
+        provided_victim_id(my_id_)
     {
         LogInfo("Created Worker with ID %i and %i initial tasks",
             my_id,
             tasks.size()
         );
-    }
-
-    // XXX for manual tests
-    std::vector<U> get_tasks() {
-        return tasks;
-    }
-    A get_result() {
-        return result;
     }
 
     // TODO establish all getters worker needs from master
@@ -168,7 +201,7 @@ public:
         while (!shutdown_request) {
             // try to take a node or steal
             std::optional<U> maybe_task = take_task();
-            if (!maybe_task.has_value()) maybe_task = steal();
+            if (!maybe_task.has_value()) maybe_task = steal2(); // XXX the second version
 
             if (maybe_task.has_value()) {
                 // perform map_reduce
@@ -182,12 +215,7 @@ public:
         ); // FIXME assumes that A can be converted to string
 
         // send result to master and shut down
-        // TODO allow master to manually stop the worker by setting active=false
         master->receive_partial_result(std::ref(result));
-
-        // // TODO shut down properly
-
-        //master->worker_finish();
     }
 
     std::optional<U>  take_task() {
@@ -195,6 +223,7 @@ public:
         if (tasks.size() > 0) {
             U next_task = tasks.back();
             tasks.pop_back();
+            num_tasks.fetch_sub(1);
             return next_task;
         }
         return std::nullopt;
@@ -203,6 +232,13 @@ public:
     void request_shutdown() {
         LogInfo("[Worker %i] Told to shut down by master", my_id);
         shutdown_request = true;
+        victim_found.notify_one(); // instead of hanging waiting for a victim should shut down
+    }
+
+    void set_victim(size_t victim_id) {
+        //LogTrace("set_victim called with id %i", victim_id);
+        provided_victim_id = victim_id;
+        victim_found.notify_one();
     }
 };
 
