@@ -2,6 +2,7 @@
 #define WORKER_HPP
 
 #include <optional>
+#include <type_traits>
 #include <vector>
 #include <functional>
 #include <condition_variable>
@@ -31,7 +32,10 @@ private:
     std::function<A(const A&, const A&)> reduce_function;
     A result;
 
-    bool active;
+    //bool active;
+    bool shutdown_request;
+
+    //const int& num_tasks; // TODO add and remove when manipulating tasks
 
     std::mutex tasks_lock;
 
@@ -39,26 +43,26 @@ private:
         U curr_task = task;
 
         // log
+        // opt 1: on numbers
         LogInfo(
             "[Worker %i] Starting map_reduce on %s",
             my_id, std::to_string(curr_task).data()
-        ); // FIXME assumes U can be converted to str
+        );
+        // opt 2: on custom with to_string method
+        // LogInfo(
+        //     "[Worker %i] Starting map_reduce on %s",
+        //     my_id, curr_task.to_string().data()
+        // );
+        // opt 3: on other types
+        // LogInfo("[Worker %i] Starting map_reduce", my_id);
 
-        while (true) {
+        while (!shutdown_request) {
             A mapped_val = map_function(curr_task);
             result = reduce_function(result, mapped_val);
 
             // compute successors
             std::vector<U> unexplored_successors = 
                 master->get_visited_set().extend(successors(curr_task));
-
-            // log
-            std::string s = "";
-            for (U elt : unexplored_successors) s += std::to_string(elt) + " ";
-            LogTrace(
-                "[Worker %i] Mapped %i to %i, reduced to %i, got successors { %s}",
-                my_id, curr_task, mapped_val, result, s.data()
-            ); // FIXME assumes U is a number
 
             if (unexplored_successors.size() > 0) {
                 curr_task = unexplored_successors.back();
@@ -71,23 +75,48 @@ private:
         }
 
         // log
+        // opt 1: on numbers
         std::string s = "";
         for (U elt : tasks) s += std::to_string(elt) + " ";
         LogInfo(
             "[Worker %i] MapReduce computation over, remaining tasks are { %s}",
             my_id, s.data()
         );
+        // opt 2: on custom types with to_string method
+        // std::string s = "";
+        // for (U elt : tasks) s += elt.to_string() + " ";
+        // LogInfo(
+        //     "[Worker %i] MapReduce computation over, remaining tasks are { %s}",
+        //     my_id, s.data()
+        // );
+        // opt 3: on other types
+        // LogInfo(
+        //     "[Worker %i] MapReduce computation over, 0 tasks remaining",
+        //     my_id
+        // );
     }
 
     std::optional<U> steal() {
-        // size_t victim_id = (my_id + 1) % num_workers;
-        // while (victim_id != my_id) {
-        //     std::optional<U> maybe_task =
-        //         master->get_workers()[victim_id]->take_task();
-        //     if (maybe_task.has_value()) return maybe_task;
+        master->worker_finish();
 
-        //     victim_id = (victim_id + 1) % num_workers;
-        // }
+        // TODO what if we try all and fail but in the meantime someone computes a lot of new successors?
+        // XXX keep trying until shutdown (busy), sleep until some signal?
+        size_t victim_id = (my_id + 1) % num_workers;
+        while (!shutdown_request) {
+            if (victim_id == my_id) {
+                victim_id = (victim_id + 1) % num_workers;
+                continue;
+            }
+            std::optional<U> maybe_task =
+                master->get_worker(victim_id)->take_task();
+            if (maybe_task.has_value()) {
+                LogInfo("[Worker %i] STOLE task from Worker %i", my_id, victim_id);
+                master->worker_restart();
+                return maybe_task;
+            }
+
+            victim_id = (victim_id + 1) % num_workers;
+        }
 
         return std::nullopt;
     }
@@ -102,6 +131,7 @@ public:
         size_t my_id_,
         Master<U, A> *master_,
         std::vector<U> tasks_
+        //const int& num_tasks_
     ):
         my_id(my_id_),
         master(master_),
@@ -111,7 +141,8 @@ public:
         map_function(master_->get_map_function()),
         reduce_function(master_->get_reduce_function()),
         result(master_->get_reduce_init()),
-        active(false)
+        shutdown_request(false)
+        //num_tasks(num_tasks_)
     {
         LogInfo("Created Worker with ID %i and %i initial tasks",
             my_id,
@@ -132,9 +163,9 @@ public:
     void run() { // TODO make sure it is only called once
         LogInfo("[Worker %i] Starting...", my_id);
 
-        active = true;
+        //active = true;
         // loop until shutdown or done
-        while (active) {
+        while (!shutdown_request) {
             // try to take a node or steal
             std::optional<U> maybe_task = take_task();
             if (!maybe_task.has_value()) maybe_task = steal();
@@ -143,12 +174,12 @@ public:
                 // perform map_reduce
                 U task = maybe_task.value();
                 map_reduce(task);
-            } else active = false; // no tasks left
+            } //else active = false; // no tasks left
         }
         LogInfo(
             "[Worker %i] Stopping with %i tasks remaining, and partial result %s",
             my_id, tasks.size(), std::to_string(result).data()
-        );
+        ); // FIXME assumes that A can be converted to string
 
         // send result to master and shut down
         // TODO allow master to manually stop the worker by setting active=false
@@ -156,7 +187,7 @@ public:
 
         // // TODO shut down properly
 
-        master->worker_finish();
+        //master->worker_finish();
     }
 
     std::optional<U>  take_task() {
@@ -169,11 +200,10 @@ public:
         return std::nullopt;
     }
 
-    bool is_active() {
-        // TODO thread safety (if master can change active for abort)
-        return active;
+    void request_shutdown() {
+        LogInfo("[Worker %i] Told to shut down by master", my_id);
+        shutdown_request = true;
     }
-
 };
 
 #endif //WORKER_HPP
