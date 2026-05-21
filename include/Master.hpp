@@ -12,6 +12,8 @@
 #include <thread>
 #include <string>
 #include <stdexcept>
+#include <algorithm>
+#include <cstddef>
 #include <mutex>
 #include <memory>
 #include <iostream>
@@ -19,25 +21,38 @@
 #include "VisitedSet.hpp"
 #include "Worker.hpp"
 
+#include <Logger.h> // uses simple-cpp-logger
+// control logging: compile with "cmake -DNO_LOGS=ON ../" or "cmake -DNO_LOGS=OFF ../"" (after only "cmake .." is enough)
+#ifdef NO_LOGS
+#define LogInfo(...) ((void)0)
+#define LogTrace(...) ((void)0)
+#endif
+
+
 template<typename U, typename A>
 class Master {
 
 private:
-    size_t num_workers;
+    const size_t num_workers;
 
     // TODO: Check if this should be passed separately or by RecursivelyEnumeratedSet,
-    std::vector<U> seeds;
-    std::function<std::vector<U>(const U&)> successors;
+    const std::vector<U> seeds;
+    const std::function<std::vector<U>(const U&)> successors;
 
-    std::function<A(const U&)> map_function;
-    std::function<A(const A&, const A&)> reduce_function;
-    A reduce_init;
+    const std::function<A(const U&)> map_function;
+    const std::function<A(const A&, const A&)> reduce_function;
+    const A reduce_init;
 
     VisitedSet<U> visited;
     size_t num_active_workers;
     std::condition_variable wake_up_my_master;
     std::vector<std::unique_ptr<Worker<U, A>>> workers;
     std::vector<std::thread> worker_threads{};
+    std::vector<std::atomic<int>> list_num_tasks;
+    std::vector<size_t> request_steal_queue;
+    // In theory we dont need this, but i just feel a bit unsafe so i add it
+    // We could just check request_steal_queue.size()
+    int num_waiting_workers;
 
     std::mutex mutex;
     bool shutdown_request;
@@ -56,6 +71,7 @@ private:
         for (size_t i = 0; i < seeds.size(); ++i) {
             size_t worker_id = i % num_workers;
             initial_task[worker_id].push_back(seeds[i]);
+            this->list_num_tasks[worker_id].fetch_add(1);
         }
 
         for (size_t i = 0; i < num_workers; ++i) {
@@ -66,7 +82,8 @@ private:
                 std::make_unique<Worker<U,A>>(
                     worker_id,
                     this,
-                    initial_task[worker_id]
+                    initial_task[worker_id],
+                    this->list_num_tasks[worker_id]
                     )
                 );
         }
@@ -86,9 +103,10 @@ private:
 
     void join_workers() {
         // TODO : Manually shut down by setting the workers field to false
-        for (std::thread& worker_thread : worker_threads) {
-            if (worker_thread.joinable()) {
-                worker_thread.join();
+        for (size_t i = 0; i < this->num_workers; ++i) {
+            this->workers[i]->request_shutdown();
+            if (this->worker_threads[i].joinable()) {
+                this->worker_threads[i].join();
             }
         }
     }
@@ -109,6 +127,26 @@ private:
         return result;
     }
 
+    size_t choose_victim(size_t theif) {
+        size_t victim = theif;
+        int best = 0;
+
+        for (size_t i = 0; i < this->list_num_tasks.size(); ++i) {
+            if (i == theif) {
+                continue;
+            }
+
+            int current = this->list_num_tasks[i].load();
+
+            if (current >= best) {
+                victim = i;
+                best = current;
+            }
+        }
+
+        return victim;
+    }
+
 
 public:
     Master(
@@ -127,11 +165,17 @@ public:
           reduce_init(reduce_init_),
           visited(VisitedSet(seeds_)),
           num_active_workers(0),
+          list_num_tasks(static_cast<std::vector<int>::size_type>(num_workers_)),
+          num_waiting_workers(0),
           shutdown_request(false),
           has_error(false)
     {
         workers.reserve(num_workers);
         worker_threads.reserve(num_workers);
+
+        for (auto& x : list_num_tasks) {
+            x.store(0);
+        }
     }
 
     void abort() {
@@ -144,6 +188,18 @@ public:
     // ---------------------------------------------------
     // Here are some other functions that Workers can call to get, instead of passing them as input for Worker
 
+    void request_steal(size_t worker_id) {
+        std::lock_guard<std::mutex> guard(mutex);
+
+        request_steal_queue.push_back(worker_id);
+        ++num_waiting_workers;
+        wake_up_my_master.notify_all();
+
+        LogInfo("[Master] Worker with ID %zu added to the request steal queue",
+            worker_id
+        );
+    }
+
     void receive_partial_result(const A& partial_result) {
         // This function is supposed to call by Worker after Worker has done her computation
         // i.e. Worker call master->receive_partial_result(partial_result);
@@ -152,6 +208,7 @@ public:
         partial_results.push_back(partial_result);
     }
 
+    // Used only in version 1
     void worker_finish() {
         // This function is supposed to call by Worker after Worker has done her computation and called receive_partial_result
         // i.e. Worker call master->worker_finish();
@@ -168,6 +225,12 @@ public:
         }
     }
 
+    // Used only in version 1
+    void worker_restart() {
+        std::lock_guard<std::mutex> guard(mutex);
+        ++num_active_workers;
+    }
+
     bool should_shutdown() {
         std::lock_guard<std::mutex> guard(mutex);
         return shutdown_request;
@@ -175,7 +238,7 @@ public:
 
     VisitedSet<U>& get_visited_set() {
         // Should we lock it?
-        return std::ref(visited);
+        return visited;
     }
 
     size_t get_num_workers() {
@@ -198,6 +261,10 @@ public:
         return this->reduce_init;
     }
 
+    Worker<U, A>* get_worker(size_t id) {
+        return this->workers[id].get();
+    }
+
     void report_error(std::string worker_error_message) {
         std::lock_guard<std::mutex> guard(mutex);
         has_error = true;
@@ -206,6 +273,77 @@ public:
         wake_up_my_master.notify_all();
     }
     // ---------------------------------------------------
+
+    A run2() {
+        start_workers();
+        bool error_happened = false;
+
+        while (true) {
+            bool request_happened = false;
+            size_t theif;
+
+            {
+                std::unique_lock<std::mutex> lock(mutex);
+                wake_up_my_master.wait(lock, [this] {
+                    return shutdown_request || has_error || (!request_steal_queue.empty());
+                });
+
+                if (shutdown_request) {
+                    break;
+                }
+
+                if (has_error) {
+                    error_happened = true;
+                    shutdown_request = true;
+                    break;
+                }
+
+                if (request_steal_queue.size() == num_workers) {
+                    // for debuug issue
+                    if (num_waiting_workers != num_workers) {
+                        throw std::runtime_error("Something wrong with waiting queue implementation");
+                    }
+
+                    shutdown_request = true;
+                    break;
+                }
+
+                if (!request_steal_queue.empty()) {
+                    request_happened = true;
+                }
+
+                if (request_happened) {
+                    theif = request_steal_queue.back();
+                    request_steal_queue.pop_back();
+                    --num_waiting_workers;
+                }
+            }
+
+            // We release lock here so that more workers can join the waiting list
+            // And for each loop, we only handle one case
+            // Since everything related to queue, state variable change should be under the lock,
+            // but we cannot hold the lock for long time since new workers should be able to join
+
+            if (request_happened) {
+                size_t victim = choose_victim(theif);
+                workers[theif]->set_victim(victim); // this victim can be yourself! If currently no task can be stolen
+                LogInfo("[Master] Giving Worker with ID %zu an victm %zu",
+                    theif,
+                    victim
+                );
+            }
+        }
+
+        join_workers();
+
+        if (error_happened) {
+            throw std::runtime_error(error_message);
+        }
+
+        A final_result = final_reduce();
+
+        return final_result;
+    }
 
     A run() {
         start_workers();
