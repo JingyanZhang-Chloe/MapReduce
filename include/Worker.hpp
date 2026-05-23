@@ -38,8 +38,9 @@ private:
 
     std::atomic<int>& num_tasks; // for communication with master
     std::condition_variable victim_found;
-    size_t provided_victim_id; // my_id if no victim provided
-    std::mutex theft_lock;
+    
+    std::optional<size_t> provided_victim_id;
+    std::mutex theft_lock; // for provided_victim_id
 
     std::mutex tasks_lock;
 
@@ -102,34 +103,41 @@ private:
 
     std::optional<U> steal2() {
         while (!shutdown_request) {
-            master->request_steal(my_id);
+            size_t victim_id = my_id;
+            {
+                std::unique_lock<std::mutex> tl(theft_lock);
+                
+                // reset provided_victim_id
+                provided_victim_id = std::nullopt;
 
-            LogTrace("[Worker %i] Sent steal request to master", my_id);
+                // sleep until master gives us a victim
+                master->request_steal(my_id);
+                LogTrace("[Worker %i] Sent steal request to master", my_id);
+                victim_found.wait(tl, [this] {
+                    return shutdown_request || provided_victim_id.has_value();
+                });
 
-            // TODO sleep until master gives us a victim
-            std::unique_lock<std::mutex> tl(theft_lock);
-            victim_found.wait(tl);
+                if (shutdown_request) break;
 
-            LogTrace("[Worker %i] Woke up with provided id %i", my_id, provided_victim_id);
-
-            if (provided_victim_id == my_id) {
-                LogTrace("[Worker %i] No one to steal from currently", my_id);
-                usleep(500); // to not overwhelm with requests?
-            } else {
-                size_t victim_id = provided_victim_id;
-                provided_victim_id = my_id; // resotore the default value
-
-                // try to steal from the given victim
-                std::optional<U> maybe_task =
-                    master->get_worker(victim_id)->take_task();
-                if (maybe_task.has_value()) {
-                    LogInfo("[Worker %i] Stole task from Worker %i", my_id, victim_id);
-                    return maybe_task;
-                }
-                // if the theft failed, then we send a request again
-                LogTrace("[Worker %i] Steal failed", my_id);
-                //usleep(500);
+                victim_id = provided_victim_id.value();
+                LogTrace("[Worker %i] Woke up with provided id %i", my_id, provided_victim_id);
             }
+
+            if (victim_id == my_id) {
+                LogTrace("[Worker %i] No one to steal from currently", my_id);
+                usleep(500); // to not overwhelm with requests???
+                continue;
+            }
+            
+            // try to steal from the given victim
+            std::optional<U> maybe_task =
+                master->get_worker(victim_id)->take_task();
+            if (maybe_task.has_value()) {
+                LogInfo("[Worker %i] Stole task from Worker %i", my_id, victim_id);
+                return maybe_task;
+            }
+            // if the theft failed, then we send a request again
+            LogTrace("[Worker %i] Steal failed", my_id);
         }
         return std::nullopt;
     }
@@ -196,7 +204,6 @@ public:
     void run() { // TODO make sure it is only called once
         LogInfo("[Worker %i] Starting...", my_id);
 
-        //active = true;
         // loop until shutdown or done
         while (!shutdown_request) {
             // try to take a node or steal
@@ -236,7 +243,7 @@ public:
     }
 
     void set_victim(size_t victim_id) {
-        //LogTrace("set_victim called with id %i", victim_id);
+        std::unique_lock<std::mutex> tl(theft_lock);
         provided_victim_id = victim_id;
         victim_found.notify_one();
     }
