@@ -10,16 +10,17 @@
 #include <unordered_set>
 #include <vector>
 #include <mutex>
+#include <iostream>
 
 template<typename U>
 class VisitedSet {
 private:
-    std::unordered_set<U> visited;
+    std::vector<U> visited;
     std::mutex mutex;
 
 public:
     VisitedSet(std::vector<U> seeds) {
-        std::unordered_set<U> initial_set(seeds.begin(), seeds.end());
+        std::vector<U> initial_set(seeds.begin(), seeds.end());
         visited = initial_set;
     }
     // bool insert(U element) {
@@ -87,21 +88,21 @@ public:
     std::vector<U> extend(std::vector<U> elements) {
         std::lock_guard<std::mutex> guard(mutex);
 
-        std::unordered_set<U> unexplored_set{};
+        std::vector<U> unexplored{};
 
         for (const auto& element : elements) {
-            auto [it, inserted] = visited.insert(element);
-            if (inserted) {
-                // this element is new to visited (possibly not new to unexplired_set)
-                auto [it, inserted] = unexplored_set.insert(element);
+            if (std::find(visited.begin(), visited.end(), element) == visited.end()) {
+                // this element is new to visited (possibly not new to unexplored)
+                visited.push_back(element);
+                if (std::find(
+                        unexplored.begin(), unexplored.end(), element
+                    ) == unexplored.end()) {
+                    unexplored.push_back(element);
+                }
             }
         }
 
-        // convert the set to a vector
-        std::vector<U> res;
-        res.insert(res.end(), unexplored_set.begin(), unexplored_set.end());
-
-        return res;
+        return unexplored;
     }
 };
 
