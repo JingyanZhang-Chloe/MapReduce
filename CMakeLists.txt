@@ -13,6 +13,7 @@ add_executable(CSE305_project
         src/Worker.cpp
         src/VisitedSet.cpp
         src/RecursivelyEnumeratedSet.cpp
+        tests/sudoku.cpp
 )
 
 target_include_directories(CSE305_project PRIVATE
