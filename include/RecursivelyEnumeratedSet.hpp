@@ -49,11 +49,11 @@ public:
     A map_reduce_avoid_duplicate(std::function<A(const U&)> map_function, std::function<A(const A&, const A&)> reduce_function, A reduce_init) {
         A result = reduce_init;
         std::vector<U> stack = seeds;
-        std::unordered_set<U> visited;
+        std::vector<U> visited;
 
         for (const U& seed : seeds) {
-            if (!visited.contain(seed)) {
-                visited.insert(seed);
+            if (std::find(visited.begin(), visited.end(), seed) == visited.end()) {
+                visited.push_back(seed);
             }
         }
 
@@ -65,8 +65,8 @@ public:
 
             std::vector<U> children = successors(current);
             for (const U& child : children) {
-                if (!visited.contain(child)){
-                    visited.insert(child);
+                if (std::find(visited.begin(), visited.end(), child) == visited.end()){
+                    visited.push_back(child);
                     stack.push_back(child);
                 }
             }
