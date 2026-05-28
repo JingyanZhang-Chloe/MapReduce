@@ -19,6 +19,22 @@
 template<typename U, typename A>
 class Master;
 
+template<typename U>
+std::string task_to_log_string(const U& task) {
+    if constexpr (requires { std::string(task); }) {
+        return std::string(task);
+    } else if constexpr (requires { std::to_string(task); }) {
+        // opt 1
+        return std::to_string(task);
+    } else if constexpr (requires { task.to_string(); }) {
+        // opt 2
+        return task.to_string();
+    } else {
+        // opt 3: other types
+        return "";
+    }
+}
+
 template<typename U, typename A>
 class Worker {
 private:
@@ -47,12 +63,23 @@ private:
     void map_reduce(const U& task) {
         U curr_task = task;
 
+        std::string task_str = task_to_log_string(task);
+
+        if (!task_str.empty()) {
+            LogInfo(
+                "[Worker %i] Starting map_reduce on %s",
+                my_id, task_str.c_str()
+                );
+        } else {
+            LogInfo("[Worker %i] Starting map_reduce", my_id);
+        }
+
         // log
         // opt 1: on numbers
-        LogInfo(
-            "[Worker %i] Starting map_reduce on %s",
-            my_id, std::to_string(curr_task).data()
-        );
+        // LogInfo(
+        //    "[Worker %i] Starting map_reduce on %s",
+        //    my_id, std::to_string(curr_task).data()
+        // );
         // opt 2: on custom with to_string method
         // LogInfo(
         //     "[Worker %i] Starting map_reduce on %s",
@@ -82,7 +109,7 @@ private:
         // log
         // opt 1: on numbers
         std::string s = "";
-        for (U elt : tasks) s += std::to_string(elt) + " ";
+        for (U elt : tasks) s += task_to_log_string(elt) + " ";
         LogInfo(
             "[Worker %i] MapReduce computation over, remaining tasks are { %s}",
             my_id, s.data()
