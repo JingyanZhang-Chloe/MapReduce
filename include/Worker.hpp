@@ -4,6 +4,7 @@
 #include <optional>
 #include <type_traits>
 #include <vector>
+#include <deque>
 #include <functional>
 #include <condition_variable>
 #include <mutex>
@@ -46,7 +47,7 @@ private:
     Master<U, A> *master;
     size_t num_workers;
 
-    std::vector<U> tasks;
+    std::deque<U> tasks; // has O(1) pop_back, back, pop_front, front
     std::atomic<int>& num_tasks;
     std::mutex tasks_lock;
     std::function<std::vector<U>(const U&)> successors;
@@ -57,6 +58,8 @@ private:
     
     bool shutdown_request;
 
+    int steal_threshold; // no stealing from workers with <=steal_threshold tasks
+    int max_n_steal; // number of tasks to steal at a time
     std::function<std::optional<U>()> steal; // the steal function to use
     std::condition_variable victim_found;
     std::optional<size_t> provided_victim_id;
@@ -70,7 +73,7 @@ private:
         if (task_str.has_value()) {
             LogInfo(
                 "[Worker %i] Starting map_reduce on %s",
-                my_id, task_str.value.c_str()
+                my_id, task_str.value().c_str()
             );
         } else LogInfo("[Worker %i] Starting map_reduce", my_id);
 
@@ -132,13 +135,21 @@ private:
                 victim_id = (victim_id + 1) % num_workers;
                 continue;
             }
-            std::optional<U> maybe_task =
-                master->get_worker(victim_id)->take_task();
+            std::vector<U> acquired_tasks =
+                master->get_worker(victim_id)->steal_tasks();
             
-            if (maybe_task.has_value()) {
-                LogInfo("[Worker %i] STOLE task from Worker %i", my_id, victim_id);
+            if (acquired_tasks.size() != 0) {
+                LogInfo(
+                    "[Worker %i] Stole %i tasks from Worker %i",
+                    my_id, acquired_tasks.size(), victim_id
+                );
                 master->worker_restart();
-                return maybe_task;
+
+                // take one task to process immediately and add remaining to tasks queue
+                U task = acquired_tasks.back();
+                acquired_tasks.pop_back();
+                add_tasks(acquired_tasks);
+                return task;
             }
 
             victim_id = (victim_id + 1) % num_workers;
@@ -167,31 +178,54 @@ private:
 
                 victim_id = provided_victim_id.value();
                 LogTrace("[Worker %i] Woke up with provided id %i", my_id, provided_victim_id);
+                // TODO also get n_to_steal from master for each theft??
             }
 
             if (victim_id == my_id) {
                 LogTrace("[Worker %i] No one to steal from currently", my_id);
-                usleep(500); // to not overwhelm with requests???
                 continue;
             }
             
             // try to steal from the given victim
-            std::optional<U> maybe_task =
-                master->get_worker(victim_id)->take_task();
-            if (maybe_task.has_value()) {
-                LogInfo("[Worker %i] Stole task from Worker %i", my_id, victim_id);
-                return maybe_task;
+            std::vector<U> acquired_tasks =
+                master->get_worker(victim_id)->steal_tasks();
+            
+            if (acquired_tasks.size() != 0) {
+                LogInfo(
+                    "[Worker %i] Stole %i tasks from Worker %i",
+                    my_id, acquired_tasks.size(), victim_id
+                );
+                master->worker_restart();
+
+                // take one task to process immediately and add remaining to tasks
+                U task = acquired_tasks.back();
+                acquired_tasks.pop_back();
+                add_tasks(acquired_tasks);
+                return task;
             }
+            
             // if the theft failed, then we send a request again
             LogTrace("[Worker %i] Steal failed", my_id);
         }
         return std::nullopt;
     }
 
+    std::optional<U> take_task() {
+        std::lock_guard<std::mutex> tl(tasks_lock);
+        if (tasks.size() > 0) {
+            U next_task = tasks.back();
+            tasks.pop_back();
+            //num_tasks.fetch_sub(1);
+            num_tasks.store(tasks.size());
+            return next_task;
+        }
+        return std::nullopt;
+    }
+
     void add_tasks(std::vector<U> new_tasks) {
         std::lock_guard<std::mutex> tl(tasks_lock);
-        for (U task : new_tasks) tasks.push_back(task);
-        num_tasks.fetch_add(new_tasks.size());
+        for (U& task : new_tasks) tasks.push_back(task);
+        num_tasks.store(tasks.size());
     }
 
 public:
@@ -205,15 +239,20 @@ public:
         my_id(my_id_),
         master(master_),
         num_workers(master_->get_num_workers()),
-        tasks(tasks_),
         successors(master_->get_successors()),
         map_function(master_->get_map_function()),
         reduce_function(master_->get_reduce_function()),
         result(master_->get_reduce_init()),
         shutdown_request(false),
         num_tasks(num_tasks_),
-        provided_victim_id(my_id_)
+        provided_victim_id(my_id_),
+        // FIXME take these from master
+        steal_threshold(2),
+        max_n_steal(5)
     {
+        // initiate the tasks queue
+        tasks = std::deque<U>(tasks_.begin(), tasks_.end());
+
         // choose the correct steal function
         switch (steal_type) {
             case NO_STEAL:
@@ -260,7 +299,7 @@ public:
         if (res_str.has_value()) {
             LogInfo(
                 "[Worker %i] Stopping with %i tasks remaining, and partial result %s",
-                my_id, tasks.size(), res_str.data()
+                my_id, tasks.size(), res_str.value().data()
             );
         } else {
             LogInfo(
@@ -273,15 +312,24 @@ public:
         master->receive_partial_result(std::ref(result));
     }
 
-    std::optional<U>  take_task() {
+    std::vector<U> steal_tasks() {
         std::lock_guard<std::mutex> tl(tasks_lock);
-        if (tasks.size() > 0) {
-            U next_task = tasks.back();
-            tasks.pop_back();
-            num_tasks.fetch_sub(1);
-            return next_task;
+        std::vector<U> stolen; // returned empty if stealing is unsuccessful
+
+        if (tasks.size() > steal_threshold) {
+            // TODO steal fixed size or portion (e.g., half)???
+            // do not steal everything
+            int n_to_steal =
+                std::min(max_n_steal, (int)tasks.size() - steal_threshold);
+
+            for (int i = 0; i < n_to_steal; ++i) {
+                stolen.push_back(tasks.front());
+                tasks.pop_front();
+            }
+            num_tasks.store(tasks.size());
         }
-        return std::nullopt;
+
+        return stolen;
     }
 
     void request_shutdown() {
