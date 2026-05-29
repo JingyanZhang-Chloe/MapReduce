@@ -73,6 +73,20 @@ public:
 };
 
 
+template<>
+struct std::hash<PartialPath>
+{
+    std::size_t operator()(const PartialPath& my_path) const noexcept
+    {
+        std::size_t hash_value = static_cast<size_t>(my_path.current_node);
+
+        for (int node: my_path.path) {
+            hash_value ^= static_cast<size_t>(node) + 0x9e3779b9 + (hash_value << 6) + (hash_value >> 2);
+        }
+    }
+};
+
+
 class Graph {
     std::vector<int> V;
     std::vector<std::pair<int, int>> E;

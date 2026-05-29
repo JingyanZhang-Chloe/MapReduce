@@ -48,12 +48,14 @@ public:
     // We should CHECK if it is possible to avoid storing all elements in S
     A map_reduce_avoid_duplicate(std::function<A(const U&)> map_function, std::function<A(const A&, const A&)> reduce_function, A reduce_init) {
         A result = reduce_init;
-        std::vector<U> stack = seeds;
-        std::vector<U> visited;
+        std::vector<U> stack;
+        std::unordered_set<U> visited;
 
         for (const U& seed : seeds) {
-            if (std::find(visited.begin(), visited.end(), seed) == visited.end()) {
-                visited.push_back(seed);
+            auto [it, inserted] = visited.insert(seed);
+
+            if (inserted) {
+                stack.push_back(seed);
             }
         }
 
@@ -64,9 +66,11 @@ public:
             result = reduce_function(result, map_function(current));
 
             std::vector<U> children = successors(current);
+
             for (const U& child : children) {
-                if (std::find(visited.begin(), visited.end(), child) == visited.end()){
-                    visited.push_back(child);
+                auto [it, inserted] = visited.insert(child);
+
+                if (inserted) {
                     stack.push_back(child);
                 }
             }
