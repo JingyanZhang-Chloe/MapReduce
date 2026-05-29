@@ -13,10 +13,18 @@ add_executable(CSE305_project
         src/Worker.cpp
         src/VisitedSet.cpp
         src/RecursivelyEnumeratedSet.cpp
-        tests/sudoku.cpp
+)
+
+add_executable(graph_exploration_test
+        tests/graph-exploration.cpp
 )
 
 target_include_directories(CSE305_project PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/simple-cpp-logger/include
+)
+
+target_include_directories(graph_exploration_test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/simple-cpp-logger/include
 )

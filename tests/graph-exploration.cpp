@@ -11,6 +11,10 @@
 #include <algorithm>
 #include <string>
 
+#include <cstdint>
+#include <cstdlib>
+#include <chrono>
+
 /*
  * Here our object U should be the partial path. since we wanna do map on the partial path to get some property
  * such as length of the current path or some property of this path
@@ -102,19 +106,34 @@ int main(int argc, char **argv) {
     }
 
     Graph graph(
-        {0, 1, 2, 3},
-        {
-            {0, 1},
-            {0, 2},
-            {1, 2},
-            {1, 3},
-            {2, 3}
-        });
+    {0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+     10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+     20, 21, 22, 23, 24, 25, 26, 27, 28, 29},
+    {
+        {0, 1}, {0, 2}, {1, 3}, {2, 3}, {3, 4},
+        {4, 5}, {5, 6}, {6, 7}, {7, 8}, {8, 9},
+        {9, 10}, {10, 11}, {11, 12}, {12, 13}, {13, 14},
+        {14, 15}, {15, 16}, {16, 17}, {17, 18}, {18, 19},
+        {19, 20}, {20, 21}, {21, 22}, {22, 23}, {23, 24},
+        {24, 25}, {25, 26}, {26, 27}, {27, 28}, {28, 29},
+
+        {0, 5}, {1, 6}, {2, 7}, {3, 8}, {4, 9},
+        {5, 10}, {6, 11}, {7, 12}, {8, 13}, {9, 14},
+        {10, 15}, {11, 16}, {12, 17}, {13, 18}, {14, 19},
+        {15, 20}, {16, 21}, {17, 22}, {18, 23}, {19, 24},
+        {20, 25}, {21, 26}, {22, 27}, {23, 28}, {24, 29},
+
+        {0, 10}, {2, 12}, {4, 14}, {6, 16}, {8, 18},
+        {10, 20}, {12, 22}, {14, 24}, {16, 26}, {18, 28},
+
+        {3, 15}, {5, 17}, {7, 19}, {9, 21}, {11, 23},
+        {13, 25}, {15, 27}, {17, 29}
+    });
 
     size_t n = graph.get_num_vertices();
 
     int begin = 0;
-    int end = 3;
+    int end = 12;
 
     size_t num_workers;
     try {
@@ -128,6 +147,7 @@ int main(int argc, char **argv) {
         incorrect_usage();
         return 0;
     }
+
 
     std::vector<PartialPath> seeds = {PartialPath(begin, {begin})};
 
@@ -149,6 +169,9 @@ int main(int argc, char **argv) {
         return next_paths;
     };
 
+    std::vector<PartialPath> extended_seeds = successors(PartialPath(begin, {begin}));
+
+
     // ---------------------------------------------------------------------------------------------------
     // Application 1: Count Hamiltonian paths
     // Here A is int, we want to return the num of paths that are Hamiltonian
@@ -166,17 +189,24 @@ int main(int argc, char **argv) {
     };
 
     int reduce_init_Hamiltonian = 0;
+    int steal_style_Hamiltonian = NO_STEAL;
 
     Master<PartialPath, int> master_Hamiltonian(
         num_workers,
-        seeds,
+        extended_seeds,
         successors,
         map_function_Hamiltonian,
         reduce_function_Hamiltonian,
-        reduce_init_Hamiltonian
+        reduce_init_Hamiltonian,
+        steal_style_Hamiltonian
     );
 
-    int number_hamiltonian_paths = master_Hamiltonian.run2();
+    auto start = std::chrono::steady_clock::now();
+    int number_hamiltonian_paths = master_Hamiltonian.run();
+    auto finish = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count();
+    std::cout << elapsed << " μs" << std::endl;
+
     std::cout << "Number of Hamiltonian paths: " << number_hamiltonian_paths << std::endl;
 
     // ---------------------------------------------------------------------------------------------------
@@ -194,16 +224,23 @@ int main(int argc, char **argv) {
     };
 
     int reduce_init_Longest = -1;
+    int steal_style_Longest = NO_STEAL;
 
     Master<PartialPath, int> master_Longest(
         num_workers,
-        seeds,
+        extended_seeds,
         successors,
         map_function_Longest,
         reduce_function_Longest,
-        reduce_init_Longest
+        reduce_init_Longest,
+        steal_style_Longest
     );
 
-    int longest_path_length = master_Longest.run2();
+    auto start2 = std::chrono::steady_clock::now();
+    int longest_path_length = master_Longest.run();
+    auto finish2 = std::chrono::steady_clock::now();
+    auto elapsed2 = std::chrono::duration_cast<std::chrono::microseconds>(finish2 - start2).count();
+    std::cout << elapsed2 << " μs" << std::endl;
+
     std::cout << "Longest path length: " << longest_path_length << std::endl;
 }

@@ -53,6 +53,7 @@ private:
     // In theory we dont need this, but i just feel a bit unsafe so i add it
     // We could just check request_steal_queue.size()
     int num_waiting_workers;
+    int steal_type;
 
     std::mutex mutex;
     bool shutdown_request;
@@ -83,7 +84,8 @@ private:
                     worker_id,
                     this,
                     initial_task[worker_id],
-                    std::ref(this->list_num_tasks[worker_id])
+                    std::ref(this->list_num_tasks[worker_id]),
+                    this->steal_type
                     )
                 );
         }
@@ -155,7 +157,8 @@ public:
         std::function<std::vector<U>(const U&)> successors_,
         std::function<A(const U&)> map_function_,
         std::function<A(const A&, const A&)> reduce_function_,
-        A reduce_init_
+        A reduce_init_,
+        int steal_type_
     )
         : num_workers(num_workers_),
           seeds(seeds_),
@@ -167,6 +170,7 @@ public:
           num_active_workers(0),
           list_num_tasks(static_cast<std::vector<int>::size_type>(num_workers_)),
           num_waiting_workers(0),
+          steal_type(steal_type_),
           shutdown_request(false),
           has_error(false)
     {
@@ -274,7 +278,7 @@ public:
     }
     // ---------------------------------------------------
 
-    A run2() {
+    A run_smart() {
         start_workers();
         bool error_happened = false;
 
@@ -345,7 +349,7 @@ public:
         return final_result;
     }
 
-    A run() {
+    A run_naive() {
         start_workers();
         bool error_happened = false;
 
@@ -376,6 +380,24 @@ public:
         A final_result = final_reduce();
 
         return final_result;
+    }
+
+    A run() {
+        switch (steal_type) {
+            case NO_STEAL:
+                return run_naive();
+            break;
+            case NAIVE_STEAL:
+                return run_naive();
+            break;
+            case SMART_STEAL:
+                return run_smart();
+            break;
+
+            default:
+                throw std::runtime_error("Improper steal type provided");
+            break;
+        }
     }
 };
 
