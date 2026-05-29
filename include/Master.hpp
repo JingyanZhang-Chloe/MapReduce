@@ -129,7 +129,7 @@ private:
         return result;
     }
 
-    size_t choose_victim(size_t theif) {
+    std::pair<size_t, int> choose_victim(size_t theif) {
         size_t victim = theif;
         int best = 0;
 
@@ -146,7 +146,9 @@ private:
             }
         }
 
-        return victim;
+        // here the queue is not locked, so probably we could use the num of total workers
+        int steal_amount = best / num_workers;
+        return std::pair(victim, steal_amount);
     }
 
 
@@ -278,6 +280,39 @@ public:
     }
     // ---------------------------------------------------
 
+    A run_naive() {
+        start_workers();
+        bool error_happened = false;
+
+        // TODO: Check if shutdown_request needs to be automic
+        while (!shutdown_request) {
+            std::unique_lock<std::mutex> lock(mutex);
+            wake_up_my_master.wait(lock, [this] {
+                return has_error || (num_active_workers == 0);
+            });
+
+            if (has_error) {
+                error_happened = true;
+                shutdown_request = true;
+            }
+
+            if (num_active_workers == 0) {
+                shutdown_request = true;
+                break;
+            }
+        }
+
+        join_workers();
+
+        if (error_happened) {
+            throw std::runtime_error(error_message);
+        }
+
+        A final_result = final_reduce();
+
+        return final_result;
+    }
+
     A run_smart() {
         start_workers();
         bool error_happened = false;
@@ -335,39 +370,6 @@ public:
                     theif,
                     victim
                 );
-            }
-        }
-
-        join_workers();
-
-        if (error_happened) {
-            throw std::runtime_error(error_message);
-        }
-
-        A final_result = final_reduce();
-
-        return final_result;
-    }
-
-    A run_naive() {
-        start_workers();
-        bool error_happened = false;
-
-        // TODO: Check if shutdown_request needs to be automic
-        while (!shutdown_request) {
-            std::unique_lock<std::mutex> lock(mutex);
-            wake_up_my_master.wait(lock, [this] {
-                return has_error || (num_active_workers == 0);
-            });
-
-            if (has_error) {
-                error_happened = true;
-                shutdown_request = true;
-            }
-
-            if (num_active_workers == 0) {
-                shutdown_request = true;
-                break;
             }
         }
 
