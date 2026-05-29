@@ -364,11 +364,12 @@ public:
             // but we cannot hold the lock for long time since new workers should be able to join
 
             if (request_happened) {
-                size_t victim = choose_victim(theif);
-                workers[theif]->set_victim(victim); // this victim can be yourself! If currently no task can be stolen
-                LogInfo("[Master] Giving Worker with ID %zu an victm %zu",
+                std::pair<size_t, int> victim_pair = choose_victim(theif);
+                workers[theif]->set_victim(victim_pair); // this victim can be yourself! If currently no task can be stolen
+                LogInfo("[Master] Giving Worker with ID %zu an victm %zu to steal %i amount of work",
                     theif,
-                    victim
+                    victim_pair.first,
+                    victim_pair.second
                 );
             }
         }
