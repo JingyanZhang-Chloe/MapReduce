@@ -16,22 +16,26 @@
 #define LogTrace(...) ((void)0)
 #endif
 
+#define NO_STEAL 0
+#define NAIVE_STEAL 1
+#define SMART_STEAL 2
+
 template<typename U, typename A>
 class Master;
 
-template<typename U>
-std::string task_to_log_string(const U& task) {
-    if constexpr (requires { std::string(task); }) {
-        return std::string(task);
-    } else if constexpr (requires { std::to_string(task); }) {
+template<typename T> // can be used both for tasks (U) and results (A)
+std::optional<std::string> to_log_string(const T& obj) {
+    if constexpr (requires { std::string(obj); }) {
+        return std::string(obj);
+    } else if constexpr (requires { std::to_string(obj); }) {
         // opt 1
-        return std::to_string(task);
-    } else if constexpr (requires { task.to_string(); }) {
+        return std::to_string(obj);
+    } else if constexpr (requires { obj.to_string(); }) {
         // opt 2
-        return task.to_string();
+        return obj.to_string();
     } else {
         // opt 3: other types
-        return "";
+        return std::nullopt;
     }
 }
 
@@ -43,50 +47,32 @@ private:
     size_t num_workers;
 
     std::vector<U> tasks;
+    std::atomic<int>& num_tasks;
+    std::mutex tasks_lock;
     std::function<std::vector<U>(const U&)> successors;
 
     std::function<A(const U&)> map_function;
     std::function<A(const A&, const A&)> reduce_function;
     A result;
-
-    //bool active;
+    
     bool shutdown_request;
 
-    std::atomic<int>& num_tasks; // for communication with master
+    std::function<std::optional<U>()> steal; // the steal function to use
     std::condition_variable victim_found;
-    
     std::optional<size_t> provided_victim_id;
     std::mutex theft_lock; // for provided_victim_id
-
-    std::mutex tasks_lock;
 
     void map_reduce(const U& task) {
         U curr_task = task;
 
-        std::string task_str = task_to_log_string(task);
-
-        if (!task_str.empty()) {
+        // log
+        std::optional<std::string> task_str = to_log_string(task);
+        if (task_str.has_value()) {
             LogInfo(
                 "[Worker %i] Starting map_reduce on %s",
-                my_id, task_str.c_str()
-                );
-        } else {
-            LogInfo("[Worker %i] Starting map_reduce", my_id);
-        }
-
-        // log
-        // opt 1: on numbers
-        // LogInfo(
-        //    "[Worker %i] Starting map_reduce on %s",
-        //    my_id, std::to_string(curr_task).data()
-        // );
-        // opt 2: on custom with to_string method
-        // LogInfo(
-        //     "[Worker %i] Starting map_reduce on %s",
-        //     my_id, curr_task.to_string().data()
-        // );
-        // opt 3: on other types
-        // LogInfo("[Worker %i] Starting map_reduce", my_id);
+                my_id, task_str.value.c_str()
+            );
+        } else LogInfo("[Worker %i] Starting map_reduce", my_id);
 
         while (!shutdown_request) {
             A mapped_val = map_function(curr_task);
@@ -107,28 +93,61 @@ private:
         }
 
         // log
-        // opt 1: on numbers
         std::string s = "";
-        for (U elt : tasks) s += task_to_log_string(elt) + " ";
-        LogInfo(
-            "[Worker %i] MapReduce computation over, remaining tasks are { %s}",
-            my_id, s.data()
-        );
-        // opt 2: on custom types with to_string method
-        // std::string s = "";
-        // for (U elt : tasks) s += elt.to_string() + " ";
-        // LogInfo(
-        //     "[Worker %i] MapReduce computation over, remaining tasks are { %s}",
-        //     my_id, s.data()
-        // );
-        // opt 3: on other types
-        // LogInfo(
-        //     "[Worker %i] MapReduce computation over, 0 tasks remaining",
-        //     my_id
-        // );
+        bool converted = true;
+        for (U elt : tasks) {
+            std::optional<std::string> task_str = to_log_string(elt);
+            if (!task_str.has_value()) {
+                converted = false;
+                break;
+            }
+            s += task_str.value() + " ";
+        }
+        if (converted) {
+            LogInfo(
+                "[Worker %i] MapReduce computation over, remaining tasks are { %s}",
+                my_id, s.data()
+            );
+        } else {
+            LogInfo(
+                "[Worker %i] MapReduce computation over, %i tasks remaining",
+                my_id, tasks.size()
+            );
+        }
     }
 
-    std::optional<U> steal2() {
+    // no steal: once the worker runs out of tasks it shuts down
+    std::optional<U> no_steal() {
+        master->worker_finish();
+        return std::nullopt;
+    }
+
+    // naive steal: worker goes through all other workers one by one until a task is acquired (or shutdown is initiated)
+    std::optional<U> naive_steal() {
+        master->worker_finish();
+
+        size_t victim_id = (my_id + 1) % num_workers;
+        while (!shutdown_request) {
+            if (victim_id == my_id) {
+                victim_id = (victim_id + 1) % num_workers;
+                continue;
+            }
+            std::optional<U> maybe_task =
+                master->get_worker(victim_id)->take_task();
+            
+            if (maybe_task.has_value()) {
+                LogInfo("[Worker %i] STOLE task from Worker %i", my_id, victim_id);
+                master->worker_restart();
+                return maybe_task;
+            }
+
+            victim_id = (victim_id + 1) % num_workers;
+        }
+        return std::nullopt;
+    }
+
+    // smart steal: worker sends a steal request to master who provides a worker to steal from
+    std::optional<U> smart_steal() {
         while (!shutdown_request) {
             size_t victim_id = my_id;
             {
@@ -169,32 +188,6 @@ private:
         return std::nullopt;
     }
 
-    std::optional<U> steal() {
-        master->worker_finish();
-
-        // TODO what if we try all and fail but in the meantime someone computes a lot of new successors?
-        // XXX keep trying until shutdown (busy), sleep until some signal?
-        size_t victim_id = (my_id + 1) % num_workers;
-        while (!shutdown_request) {
-            if (victim_id == my_id) {
-                victim_id = (victim_id + 1) % num_workers;
-                continue;
-            }
-            std::optional<U> maybe_task =
-                master->get_worker(victim_id)->take_task();
-            
-            if (maybe_task.has_value()) {
-                LogInfo("[Worker %i] STOLE task from Worker %i", my_id, victim_id);
-                master->worker_restart();
-                return maybe_task;
-            }
-
-            victim_id = (victim_id + 1) % num_workers;
-        }
-
-        return std::nullopt;
-    }
-
     void add_tasks(std::vector<U> new_tasks) {
         std::lock_guard<std::mutex> tl(tasks_lock);
         for (U task : new_tasks) tasks.push_back(task);
@@ -206,7 +199,8 @@ public:
         size_t my_id_,
         Master<U, A> *master_,
         std::vector<U> tasks_,
-        std::atomic<int>& num_tasks_
+        std::atomic<int>& num_tasks_,
+        int steal_type
     ):
         my_id(my_id_),
         master(master_),
@@ -220,28 +214,46 @@ public:
         num_tasks(num_tasks_),
         provided_victim_id(my_id_)
     {
+        // choose the correct steal function
+        switch (steal_type) {
+            case NO_STEAL:
+                // no steal
+                steal = [this]() { return no_steal(); };
+                break;
+            case NAIVE_STEAL:
+                // naive steal
+                steal = [this]() { return naive_steal(); };
+                break;
+            case SMART_STEAL:
+                // smart steal
+                steal = [this]() { return smart_steal(); };
+                break;
+            
+            default:
+                throw std::runtime_error("Improper steal type provided");
+                break;
+        }
+
         LogInfo("Created Worker with ID %i and %i initial tasks",
             my_id,
             tasks.size()
         );
     }
 
-    // TODO establish all getters worker needs from master
-
-    void run() { // TODO make sure it is only called once
+    void run() {
         LogInfo("[Worker %i] Starting...", my_id);
 
         // loop until shutdown or done
         while (!shutdown_request) {
             // try to take a node or steal
             std::optional<U> maybe_task = take_task();
-            if (!maybe_task.has_value()) maybe_task = steal2(); // XXX the second version
+            if (!maybe_task.has_value()) maybe_task = steal();
 
             if (maybe_task.has_value()) {
                 // perform map_reduce
                 U task = maybe_task.value();
                 map_reduce(task);
-            } //else active = false; // no tasks left
+            } else break; // for "no steal" -- stop once all tasks have been processed
         }
         LogInfo(
             "[Worker %i] Stopping with %i tasks remaining, and partial result %s",
