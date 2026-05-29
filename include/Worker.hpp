@@ -255,10 +255,19 @@ public:
                 map_reduce(task);
             } else break; // for "no steal" -- stop once all tasks have been processed
         }
-        LogInfo(
-            "[Worker %i] Stopping with %i tasks remaining, and partial result %s",
-            my_id, tasks.size(), std::to_string(result).data()
-        ); // FIXME assumes that A can be converted to string
+
+        std::optional<std::string> res_str = to_log_string(result);
+        if (res_str.has_value()) {
+            LogInfo(
+                "[Worker %i] Stopping with %i tasks remaining, and partial result %s",
+                my_id, tasks.size(), res_str.data()
+            );
+        } else {
+            LogInfo(
+                "[Worker %i] Stopping with %i tasks remaining",
+                my_id, tasks.size()
+            );
+        }
 
         // send result to master and shut down
         master->receive_partial_result(std::ref(result));
