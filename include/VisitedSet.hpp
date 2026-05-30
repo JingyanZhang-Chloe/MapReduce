@@ -39,6 +39,17 @@ public:
         }
     }
 
+    size_t size() {
+        size_t res = 0;
+        for (size_t i = 0; i < NUM_GROUPS; ++i) {
+            {
+                std::lock_guard<std::mutex> lk(groups[i].mutex);
+                res += groups[i].elements.size();
+            }
+        }
+        return res;
+    }
+
     // adds only elements not already in visited, returns all such elements
     std::vector<U> extend(std::vector<U> elements) {
         // group elements
