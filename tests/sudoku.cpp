@@ -1,13 +1,15 @@
 #include <cstdint>
+#include <utility>
 #include <cstdlib>
 #include <chrono>
 #include <vector>
 #include <Master.hpp>
+#include <RecursivelyEnumeratedSet.hpp>
 
-#include <Logger.h> // uses simple-cpp-logger
-#ifdef NO_LOGS
-#define LogInfo(...) ((void)0)
-#endif
+// #include <Logger.h> // uses simple-cpp-logger
+// #ifdef NO_LOGS
+// #define LogInfo(...) ((void)0)
+// #endif
 
 #define MIN_WORKERS 1
 #define MAX_WORKERS 10
@@ -20,9 +22,17 @@ typedef uint8_t cell_t; // numbers 0 (empty cell) and 1-9
 typedef uint16_t mask_t; // 9 bit numbers to show which integers are seen
 
 class Sudoku {
+public:
+    static constexpr int N_WORDS = 6; // 64-bit words (6*64=384, while 4*81=324 needed)
+    std::array<uint64_t, N_WORDS> packed_grid{};
 private:
-    static const int N = 9;
-    static const int SIZE = 81;
+    static constexpr int N = 9;
+    static constexpr int SIZE = 81;
+
+    // for hashing
+    static constexpr int CELL_BITS = 4; // each number is 9 at most (so 0b1001)
+    static constexpr int CELL_BITS_FULL = 0b1111;
+    static constexpr int WORD_SIZE = 64;
 
     std::array<cell_t, SIZE> grid;
     uint8_t empty_count;
@@ -102,6 +112,14 @@ public:
         row_masks[r] |= bit;
         col_masks[c] |= bit;
         block_masks[b] |= bit;
+
+        // set the packed value
+        int bit_pos = i * CELL_BITS;
+        int word_idx = bit_pos / WORD_SIZE;
+        int offset_in_word = bit_pos % WORD_SIZE;
+        // XXX packed_grid[word_idx] &= ~((uint64_t)CELL_BITS_FULL << offset_in_word); // clear the value
+        packed_grid[word_idx] |= ((uint64_t)num << offset_in_word);
+
         return true;
     }
 
@@ -109,26 +127,27 @@ public:
         return empty_count == 0;
     }
     
-    std::array<bool, SIZE> get_empty_cells() {
+    std::array<bool, SIZE> get_empty_cells() const {
         return empty_cells;
     }
 
-    std::array<cell_t, SIZE> get_grid() {
+    std::array<cell_t, SIZE> get_grid() const {
         return grid;
     }
 
-    cell_t grid_at(int i) {
+    cell_t grid_at(int i) const {
         return grid[i];
     }
 
-    bool operator==(Sudoku other) {
-        for (int i = 0; i < SIZE; ++i) {
-            if (grid[i] != other.grid_at(i)) return false;
-        }
-        return true;
+    std::array<uint64_t, N_WORDS> get_packed_grid() const {
+        return packed_grid;
     }
 
-    std::string to_string() {
+    bool operator==(const Sudoku& other) const {
+        return packed_grid == other.get_packed_grid();
+    }
+
+    std::string to_string() const {
         std::string res = "\n+-------+-------+-------+\n";
         for (int i = 0; i < N; ++i) {
             for (int j = 0; j < N; ++j) {
@@ -143,7 +162,7 @@ public:
         return res;
     }
 
-    static std::vector<Sudoku> successors(Sudoku sudoku) {
+    static std::vector<Sudoku> successors(const Sudoku& sudoku) {
         std::vector<Sudoku> res = {};
 
         if (sudoku.is_solved()) return res;
@@ -171,171 +190,282 @@ public:
     static const int reduce_init_for_count = 0;
 };
 
+// hashing function of sudoku (to allow unordered_set use)
+template<>
+struct std::hash<Sudoku> {
+    std::size_t operator()(const Sudoku& sudoku) const {
+        const uint64_t* data = sudoku.get_packed_grid().data();
+        uint64_t res = data[0]; // first word
+
+        for (int i = 0; i < Sudoku::N_WORDS; ++i) {
+            // 64-bit magic constant 0x9e3779b97f4a7c15
+            res ^= data[i] + 0x9e3779b97f4a7c15 + (res << 6) + (res >> 2);
+        }
+        return res;
+    }
+};
+
 void incorrect_usage() {
-    LogInfo("Incorrect usage");
-    std::cout << "Usage: ./CSE305_project <num_workers>" << std::endl;
-    std::cout << "(at least " << MIN_WORKERS << " and at most " << MAX_WORKERS << " workers can be used)" << std::endl;
+    std::cout << "Usage: ./sudoku_test <number of workers> [-blanks <number of empty cells>] [-seq] [-noseq] [-steal <steal type>]" << std::endl;
+    std::cout << "  Default: the \"count number of solutions\" test is executed sequentially and in parallel with each work-stealing type on a sudoku with 10 empty cells" << std::endl;
+    std::cout << "  Argument sepcifications:" << std::endl;
+    std::cout << "    - at least " << MIN_WORKERS << " and at most " << MAX_WORKERS << " workers can be used" << std::endl;
+    std::cout << "    - number of empty cellc should be at most " << 20 << " (over 14 not recommended for sequential program)" << std::endl;
+    std::cout << "    - \"-seq\" will run the sequential algorithm" << std::endl;
+    std::cout << "    - \"-noseq\" will run all but the sequential algorithm" << std::endl;
+    std::cout << "    - steal type (incompatible with \"-seq\") should be 0 (no work-stealing), 1 (naive work-stealing), or 2 (smart work-stealing)" << std::endl;
 }
 
-void count_solutions(size_t num_workers);
-void find_solution(size_t num_workers);
+struct Config {
+    int num_workers;
+    // fill with default values
+    int blanks = 10;
+    bool test_seq_only = false;
+    bool test_seq = true;
+    int steal_type = -1; // -1 means test each type
+};
 
-int main(int argc, char **argv) {
+Config parse_args(int argc, char** argv) {
     if (argc < 2) {
         incorrect_usage();
-        return 0;
+        throw std::runtime_error("No number of workers provided");
     }
 
-    size_t num_workers;
+    Config config;
+    
+    // number of workers
     try {
-        num_workers = std::stoi(argv[1]);
-    } catch(...) {
+        config.num_workers = std::stoi(argv[1]);
+    } catch (...) {
         incorrect_usage();
-        return 0;
+        throw std::runtime_error("Invalid number of workers");
     }
 
-    if (num_workers < MIN_WORKERS || num_workers > MAX_WORKERS) {
+    // optional arguments
+    int i = 2;
+    while (i < argc) {
+        std::string arg = argv[i];
+
+        // check each possible argument
+        if (arg == "-seq") {
+            config.test_seq_only = true;
+            ++i;
+        } else if (arg == "-blanks") {
+            if (i + 1 == argc) {
+                incorrect_usage();
+                throw std::runtime_error("No number of empty cells provided after -blanks");
+            }
+            try {
+                int blanks = std::stoi(argv[i + 1]);
+                if (blanks < 0 || blanks > 20) {
+                    incorrect_usage();
+                    throw std::runtime_error("Invalid number of empty cells");
+                }
+                config.blanks = blanks;
+            } catch (...) {
+                incorrect_usage();
+                throw std::runtime_error("Invalid number of empty cells");
+            }
+            i += 2;
+        } else if (arg == "-steal") {
+            if (i + 1 == argc) {
+                incorrect_usage();
+                throw std::runtime_error("No steal type provided after -steal");
+            }
+            std::string steal_type = argv[i + 1];
+            if (steal_type != "0" && steal_type != "1" && steal_type != "2") {
+                incorrect_usage();
+                throw std::runtime_error("Invalid steal type");
+            }
+            config.steal_type = std::stoi(steal_type);
+            i += 2;
+        } else if (arg == "-noseq") {
+            config.test_seq = false;
+            ++i;
+        } else {
+            incorrect_usage();
+            throw std::runtime_error("Unknown argument: " + arg);
+        }
+    }
+    // ensure not steal type and sequential testing simulteneously
+    if (config.steal_type != -1 && config.test_seq_only) {
         incorrect_usage();
-        return 0;
+        throw std::runtime_error("-seq and -steal are incompatible");
     }
 
-    //count_solutions(num_workers);
-    find_solution(num_workers);
+    return config;
+}
+
+void count_solutions(Config config) {
+    auto map = [](const Sudoku& x){
+        if (x.is_solved()) return 1;
+        return 0;
+    };
+    auto reduce = [](const int& x, const int& y){ return x + y; };
+    int reduce_init = 0;
+
+    // full grids
+    // source: https://www.kaggle.com/datasets/rohanrao/sudoku
+    std::vector<std::string> full_grids = {
+        "679518243543729618821634957794352186358461729216897534485276391962183475137945862",
+        "371986524846521379592473861463819752285347916719652438634195287128734695957268143",
+        "748391562365248791912675483421786935589413276673529814834962157296157348157834629",
+        "298317645764285139153946278327168954981453726645792813539821467872634591416579382",
+        "142895637975136824836742519398467152451328796267519348529673481613284975784951263"
+    };
+    int N_ITERS = 5;
+
+    int n_blanks = config.blanks;
+    std::cout << "Solving sudoku with " << n_blanks << " empty cells" << std::endl;
+
+    // create the Sudoku objects
+    std::vector<Sudoku> full_sudokus{};
+    std::vector<Sudoku> test_sudokus{};
+    for (std::string full_grid : full_grids) {
+        // randomly choose empty cell positions
+        std::vector<int> positions{};
+        while (positions.size() < n_blanks) {
+            int candidate = rand() % 81;
+            if (std::find(positions.begin(), positions.end(), candidate) == positions.end()) positions.push_back(candidate);
+        }
+        for (int p : positions) std::cout << p << " ";
+        std::cout << std::endl;
+
+        std::string grid_str = full_grid;
+        // remove certain numbers
+        for (int p : positions) grid_str[p] = '0';
+
+        full_sudokus.push_back(Sudoku(Sudoku::string_to_grid(full_grid)));
+
+        Sudoku sudoku = Sudoku(Sudoku::string_to_grid(grid_str));
+        // std::cout << sudoku.to_string() << std::endl;
+        test_sudokus.push_back(sudoku);
+    }
+
+    // testing
+    std::vector<std::string> steal_name = {"no", "naive", "smart"};
+    std::vector<size_t> search_space{};
+    std::vector<int64_t> time_seq{};
+    std::vector<std::vector<int64_t>> time_par(3);
+    for (int j = 0; j < N_ITERS * full_grids.size(); ++j) {
+        int i = j % full_grids.size();
+
+        //std::vector<Sudoku> seeds = {sudoku};
+        // start after one round of successors (for no stealing tests)
+        std::vector<Sudoku> seeds = Sudoku::successors(test_sudokus[i]);
+        size_t count = 0;
+        size_t *tasks_processed = &count;
+        auto parallel_test = [
+            steal_name, config, seeds, map, reduce, reduce_init, tasks_processed
+        ](int steal_type) {
+            std::cout << "Parallel with " << steal_name[steal_type] << " work-stealing" << std::endl;
+
+            Master<Sudoku, int> master(
+                config.num_workers,
+                seeds,
+                Sudoku::successors,
+                map,
+                reduce,
+                reduce_init,
+                steal_type
+            );
+            auto start = std::chrono::steady_clock::now();
+            int res = master.run();
+            auto finish = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count();
+            std::cout << elapsed << " μs (" << elapsed / 1000 << " ms)" << std::endl;
+            std::cout << "Result: " << res << std::endl;
+
+            // check the total number of successors processed
+            if (*tasks_processed == 0) *tasks_processed = master.get_visited_set().size();
+            std::cout << "==============================" << std::endl;
+
+            std::pair<int, uint64_t> pair(res, elapsed);
+            return pair;
+        };
+
+        // only one parallel test
+        if (config.steal_type != -1) {
+            uint64_t time = parallel_test(config.steal_type).second;
+            // record the time and search space size
+            time_par[config.steal_type].push_back(time);
+            search_space.push_back(count);
+            continue;
+        }
+
+        std::vector<int> results = {}; // record all results
+
+        if (config.test_seq) {
+            // sequential tests
+            std::cout << "Sequential" << std::endl;
+            RESetMapReduce<Sudoku, int> re(seeds, Sudoku::successors);
+            auto start = std::chrono::steady_clock::now();
+            int res =
+                re.map_reduce_avoid_duplicate(map,reduce, reduce_init);
+            auto finish = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count();
+            std::cout << elapsed << " μs (" << elapsed / 1000 << " ms)" << std::endl;
+            time_seq.push_back(elapsed);
+            std::cout << "Result: " << res << std::endl;
+            results.push_back(res);
+            std::cout << "==============================" << std::endl;
+            // stop if only sequential test requested
+            if (config.test_seq_only) continue;
+        }
+
+        // test each work-stealing
+        for (int i = 0; i < 3; ++i) {
+            std::pair<int, uint64_t> res_and_time = parallel_test(i);
+            results.push_back(res_and_time.first);
+            time_par[i].push_back(res_and_time.second);
+        }
+
+        // record the search space size
+        search_space.push_back(count);
+
+        // ensure all results match
+        int res1 = results[0];
+        for (int i = 1; i < results.size(); ++i) {
+            if (results[i] != res1) throw std::runtime_error("DIFFERENT RESULTS");
+        }
+    }
+
+    // average search space size
+    if (!config.test_seq_only) {
+        size_t sum = 0;
+        for (size_t s : search_space) sum += s;
+        std::cout << "Average search space size: " << sum / search_space.size() << std::endl;
+    }
+
+    // average time
+    if (config.steal_type != -1) {
+        uint64_t sum = 0;
+        for (uint64_t t : time_par[config.steal_type]) sum += t;
+        std::cout << "Parallel with " << steal_name[config.steal_type] << " work-stealing average time: " << sum / time_par[config.steal_type].size() << std::endl;
+        return;
+    }
+
+    if (config.test_seq) {
+        // sequential results
+        uint64_t sum = 0;
+        for (uint64_t t : time_seq) sum += t;
+        std::cout << "Sequential average time: " << sum / time_seq.size() << std::endl;
+    }
+    
+    // all parallel results
+    if (!config.test_seq_only) {
+        for (int i = 0; i < 3; ++i) {
+            uint64_t sum = 0;
+            for (uint64_t t : time_par[i]) sum += t;
+            std::cout << "Parallel with " << steal_name[i] << " work-stealing average time: " << sum / time_par[i].size() << std::endl;
+        }
+    }
+}
+
+int main(int argc, char **argv) {
+    Config config = parse_args(argc, argv);
+
+    count_solutions(config);
 
     return 0;
-}
-
-void log_result(int got, int expected) {
-    if (got == expected) {
-        LogInfo(GREEN "[Success] Result -- expected %i and got %i" RESET, expected, got);
-    } else {
-        LogInfo(RED "[Fail] Result -- expected %i and got %i" RESET, expected, got);
-    }
-}
-
-void count_solutions(size_t num_workers) {
-    // std::array<cell_t, 81> grid = {
-    //     3,  1,  6,      5,  7,  8,      4,  9,  2,
-    //     5,  2,  9,      1,  3,  4,      7,  6,  8,
-    //     4,  8,  7,      6,  2,  9,      5,  3,  1,
-
-    //     2,  6,  3,      4,  1,  5,      9,  8,  7,
-    //     9,  7,  4,      8,  6,  3,      1,  2,  5,
-    //     8,  5,  1,      7,  9,  2,      6,  4,  3,
-
-    //     1,  3,  8,      9,  4,  7,      2,  5,  6,
-    //     6,  9,  2,      3,  5,  1,      8,  7,  4,
-    //     7,  4,  5,      2,  8,  6,      3,  1,  9
-    // };
-    // TODO randomly clear a specific number of cells?
-
-    std::array<cell_t, 81> grid = {
-        3,  1,  6,      5,  7,  8,      4,  9,  2,
-        5,  2,  9,      1,  3,  4,      7,  6,  8,
-        4,  8,  7,      6,  2,  0,      0,  3,  1,
-
-        2,  6,  3,      4,  1,  0,      0,  8,  7,
-        9,  7,  4,      8,  6,  3,      1,  2,  5,
-        8,  5,  1,      7,  9,  2,      6,  4,  3,
-
-        1,  3,  8,      9,  4,  7,      2,  5,  6,
-        6,  9,  2,      3,  5,  1,      8,  7,  4,
-        7,  4,  5,      2,  8,  6,      3,  1,  9
-    }; // expect 1 solution
-    Sudoku sudoku = Sudoku(grid);
-    std::vector<Sudoku> seeds = {sudoku}; // single grid
-
-    // count solutions
-    auto cardinal_map = [](const Sudoku& x){ return 1; };
-    auto cardinal_reduce = [](const int& x, const int& y){ return x + y; };
-    int cardinal_reduce_init = 0;
-    int cardinal_result = 1;
-
-    Master<Sudoku, int> master1(
-        num_workers,
-        seeds,
-        Sudoku::successors,
-        Sudoku::map_for_count,
-        Sudoku::reduce_for_count,
-        Sudoku::reduce_init_for_count
-    );
-    int master1_res = master1.run2();
-    if (cardinal_result == master1_res) {
-        LogInfo(GREEN "[Success] Result -- expected %i and got %i" RESET, cardinal_result, master1_res);
-    } else {
-        LogInfo(RED "[Fail] Result -- expected %i and got %i" RESET, cardinal_result, master1_res);
-    }
-}
-
-void find_solution(size_t num_workers) {
-    auto identity_map = [](const Sudoku& x){ return x; };
-    auto solution_reduce = [](const Sudoku& x, const Sudoku& y){
-        if (x.is_solved()) return x;
-        return y;
-    };
-    Sudoku reduce_init = Sudoku();
-
-    // std::array<cell_t, 81> grid = {
-    //     3,  1,  6,      5,  7,  8,      4,  9,  2,
-    //     5,  2,  9,      1,  3,  4,      7,  6,  8,
-    //     4,  8,  7,      6,  2,  0,      0,  3,  1,
-
-    //     2,  6,  3,      4,  1,  0,      0,  8,  7,
-    //     9,  7,  4,      8,  6,  3,      1,  2,  5,
-    //     8,  5,  1,      7,  9,  2,      6,  4,  3,
-
-    //     1,  3,  8,      9,  4,  7,      2,  5,  6,
-    //     6,  9,  2,      3,  5,  1,      8,  7,  4,
-    //     7,  4,  5,      2,  8,  6,      3,  1,  9
-    // }; // expect 1 solution
-    // Sudoku sudoku = Sudoku(grid);
-    // std::vector<Sudoku> seeds = {sudoku}; // single grid
-
-    // Master<Sudoku, Sudoku> master(
-    //     num_workers,
-    //     seeds,
-    //     Sudoku::successors,
-    //     identity_map,
-    //     solution_reduce,
-    //     reduce_init
-    // );
-    // Sudoku res = master.run2();
-    // std::cout << res.to_string() << std::endl;
-
-    int n_blanks = 14;
-    std::vector<int> positions{};
-    while (positions.size() < n_blanks) {
-        int candidate = rand() % 81;
-        if (std::find(positions.begin(), positions.end(), candidate) == positions.end()) positions.push_back(candidate);
-    }
-    for (int p : positions) std::cout << p << " ";
-    std::cout << std::endl;
-
-    std::string full_grid_str = "125946738468237915937815642879152463316489527254763891541398276783624159692571384";
-    std::string grid_str = full_grid_str;
-    // remove certain numbers
-    for (int p : positions) grid_str[p] = '0';
-
-    Sudoku full_sudoku = Sudoku(Sudoku::string_to_grid(full_grid_str));
-
-    Sudoku sudoku = Sudoku(Sudoku::string_to_grid(grid_str));
-    std::cout << sudoku.to_string() << std::endl;
-
-    std::vector<Sudoku> seeds = {sudoku}; // single grid
-    Master<Sudoku, Sudoku> master(
-        num_workers,
-        seeds,
-        Sudoku::successors,
-        identity_map,
-        solution_reduce,
-        reduce_init
-    );
-    auto start = std::chrono::steady_clock::now();
-    Sudoku res = master.run2();
-    auto finish = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count();
-    std::cout << elapsed << " μs" << std::endl;
-    //std::cout << res.to_string() << std::endl;
-
-    if (full_sudoku == res) std::cout << "match" << std::endl;
 }

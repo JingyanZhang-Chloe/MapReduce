@@ -19,12 +19,21 @@ add_executable(graph_exploration_test
         tests/graph-exploration.cpp
 )
 
+add_executable(sudoku_test
+        tests/sudoku.cpp
+)
+
 target_include_directories(CSE305_project PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/simple-cpp-logger/include
 )
 
 target_include_directories(graph_exploration_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/simple-cpp-logger/include
+)
+
+target_include_directories(sudoku_test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/simple-cpp-logger/include
 )
