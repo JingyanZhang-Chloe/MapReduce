@@ -194,6 +194,11 @@ public:
     // ---------------------------------------------------
     // Here are some other functions that Workers can call to get, instead of passing them as input for Worker
 
+    size_t get_visited_set_size() {
+        std::lock_guard<std::mutex> guard(mutex);
+        return visited.size();
+    }
+
     void request_steal(size_t worker_id) {
         std::lock_guard<std::mutex> guard(mutex);
 
@@ -201,9 +206,9 @@ public:
         ++num_waiting_workers;
         wake_up_my_master.notify_all();
 
-        LogInfo("[Master] Worker with ID %zu added to the request steal queue",
-            worker_id
-        );
+        // LogInfo("[Master] Worker with ID %zu added to the request steal queue",
+        //     worker_id
+        // );
     }
 
     void receive_partial_result(const A& partial_result) {
@@ -366,11 +371,11 @@ public:
             if (request_happened) {
                 std::pair<size_t, int> victim_pair = choose_victim(theif);
                 workers[theif]->set_victim(victim_pair); // this victim can be yourself! If currently no task can be stolen
-                LogInfo("[Master] Giving Worker with ID %zu an victm %zu to steal %i amount of work",
-                    theif,
-                    victim_pair.first,
-                    victim_pair.second
-                );
+                // LogInfo("[Master] Giving Worker with ID %zu an victm %zu to steal %i amount of work",
+                //     theif,
+                //     victim_pair.first,
+                //     victim_pair.second
+                // );
             }
         }
 

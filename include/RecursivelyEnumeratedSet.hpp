@@ -14,6 +14,7 @@ class RESetMapReduce {
 private:
     std::vector<U> seeds;
     std::function<std::vector<U>(const U&)> successors;
+    std::unordered_set<U> visited;
 
 public:
     //constructor to make the RE set
@@ -49,7 +50,6 @@ public:
     A map_reduce_avoid_duplicate(std::function<A(const U&)> map_function, std::function<A(const A&, const A&)> reduce_function, A reduce_init) {
         A result = reduce_init;
         std::vector<U> stack;
-        std::unordered_set<U> visited;
 
         for (const U& seed : seeds) {
             auto [it, inserted] = visited.insert(seed);
@@ -77,6 +77,10 @@ public:
         }
 
         return result;
+    }
+
+    size_t get_visited_set_size() {
+        return visited.size();
     }
 };
 

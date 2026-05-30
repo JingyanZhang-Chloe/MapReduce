@@ -128,7 +128,7 @@ std::string steal_style_name(int style) {
 
 
 template<typename U, typename A>
-void run_test_case(
+std::pair<std::vector<double>, std::vector<double>> run_test_case(
     const std::string& test_name,
     size_t num_workers,
     int num_iterations,
@@ -139,13 +139,28 @@ void run_test_case(
     A reduce_init
 ) {
     std::cout << "\n------------ " << test_name << " ------------" << std::endl;
+    std::cout << "\n------------ " << num_workers << " ------------" << std::endl;
 
     // we make this expected value, for every run in each method, we check if we get a diff result, if so raise
     A expected = reduce_init;
+    size_t visited_set_size = 0;
+
+    // should be
+    // average_time_vector[0] = average squential
+    // average_time_vector[1] = average for NO STEAL
+    // average_time_vector[2] = average for NAIVE STEAL
+    // average_time_vector[3] = average for SMART STEAL
+    std::vector<double> average_time_vector;
+
+    // should be
+    // average_speedup_vector[0] = average squential
+    // average_speedup_vector[1] = average for NO STEAL
+    // average_speedup_vector[2] = average for NAIVE STEAL
+    // average_speedup_vector[3] = average for SMART STEAL
+    std::vector<double> average_speedup_vector;
 
     // ------------------------------------------------------------
     // Sequential
-
     long long total_sequential_time = 0;
     long long best_sequential_time = std::numeric_limits<long long>::max();
 
@@ -159,23 +174,28 @@ void run_test_case(
             reduce_function,
             reduce_init
         );
-
         auto finish = std::chrono::steady_clock::now();
 
         long long elapsed = std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count();
 
+        size_t visited_set_size_sequential = sequential.get_visited_set_size();
         total_sequential_time += elapsed;
         best_sequential_time = std::min(best_sequential_time, elapsed);
 
         if (iter == 0) {
-            // store the result first
+            // store the result first, store the size
             expected = result;
+            visited_set_size = visited_set_size_sequential;
         } else if (result != expected) {
             throw std::logic_error("Sequential result changed between iterations");
+        } else if (visited_set_size != visited_set_size_sequential) {
+            throw std::logic_error("Sequential visited set size changed between iterations");
         }
     }
 
     double average_sequential_time = static_cast<double>(total_sequential_time) / num_iterations;
+    average_time_vector.push_back(average_sequential_time);
+    average_speedup_vector.push_back(1);
 
     std::cout << "Sequential average time: " << average_sequential_time << " μs" << std::endl;
     std::cout << "Sequential best time:    " << best_sequential_time << " μs" << std::endl;
@@ -212,12 +232,18 @@ void run_test_case(
 
             long long elapsed = std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count();
 
+            size_t visited_set_size_parallel = master.get_visited_set_size();
             total_parallel_time += elapsed;
             best_parallel_time = std::min(best_parallel_time, elapsed);
 
             if (result != expected) {
                 throw std::logic_error(
                     "Results mismatch in " + test_name +
+                    " with " + steal_style_name(steal_style)
+                );
+            } else if (visited_set_size_parallel != visited_set_size) {
+                throw std::logic_error(
+                    "Visited set size mismatch in " + test_name +
                     " with " + steal_style_name(steal_style)
                 );
             }
@@ -233,6 +259,9 @@ void run_test_case(
             static_cast<double>(best_sequential_time) /
             static_cast<double>(best_parallel_time);
 
+        average_time_vector.push_back(average_parallel_time);
+        average_speedup_vector.push_back(average_speedup);
+
         std::cout << "\nMode: " << steal_style_name(steal_style) << std::endl;
         std::cout << "Average time: " << average_parallel_time << " μs" << std::endl;
         std::cout << "Best time:    " << best_parallel_time << " μs" << std::endl;
@@ -241,7 +270,81 @@ void run_test_case(
     }
 
     // if we reach here means all results match
+    // size also matches
+    std::cout << "Visited set size: " << visited_set_size <<std::endl;
     std::cout << "TEST PASSSSSSSSSS" << std::endl;
+
+    return {average_time_vector, average_speedup_vector};
+}
+
+template<typename U, typename A>
+void plot_test_case(
+    const std::string& test_name,
+    int num_iterations,
+    const std::vector<U>& seeds,
+    std::function<std::vector<U>(const U&)> successors,
+    std::function<A(const U&)> map_function,
+    std::function<A(const A&, const A&)> reduce_function,
+    A reduce_init,
+    const std::vector<size_t>& num_workers_range
+    ) {
+    // we need to have two plots, one for time, one for speedup
+
+    std::vector<double> sequential_time_vector;
+    std::vector<double> NO_STEAL_time_vector;
+    std::vector<double> NAIVE_STEAL_time_vector;
+    std::vector<double> SMART_STEAL_time_vector;
+
+    std::vector<double> NO_STEAL_speedup_vector;
+    std::vector<double> NAIVE_STEAL_speedup_vector;
+    std::vector<double> SMART_STEAL_speedup_vector;
+
+    for (size_t num_worker : num_workers_range) {
+        auto the_pair = run_test_case(test_name,
+            num_worker,
+            num_iterations,
+            seeds,
+            successors,
+            map_function,
+            reduce_function,
+            reduce_init);
+
+        std::vector<double> average_time_vector = the_pair.first;
+        std::vector<double> average_speedup_vector = the_pair.second;
+
+        sequential_time_vector.push_back(average_time_vector[0]);
+        NO_STEAL_time_vector.push_back(average_time_vector[1]);
+        NAIVE_STEAL_time_vector.push_back(average_time_vector[2]);
+        SMART_STEAL_time_vector.push_back(average_time_vector[3]);
+
+        NO_STEAL_speedup_vector.push_back(average_speedup_vector[1]);
+        NAIVE_STEAL_speedup_vector.push_back(average_speedup_vector[2]);
+        SMART_STEAL_speedup_vector.push_back(average_speedup_vector[3]);
+    }
+
+    std::ofstream csv_file("benchmark_results.csv");
+    if (!csv_file.is_open()) {
+        std::cerr << "Error opening file for writing CSV!" << std::endl;
+        return;
+    }
+
+    // CSV Header
+    csv_file << "Workers,Seq_Time,NoSteal_Time,NaiveSteal_Time,SmartSteal_Time,"
+             << "NoSteal_Speedup,NaiveSteal_Speedup,SmartSteal_Speedup\n";
+
+    // Write Data rows
+    for (size_t i = 0; i < num_workers_range.size(); ++i) {
+        csv_file << num_workers_range[i] << ","
+                 << sequential_time_vector[i] << ","
+                 << NO_STEAL_time_vector[i] << ","
+                 << NAIVE_STEAL_time_vector[i] << ","
+                 << SMART_STEAL_time_vector[i] << ","
+                 << NO_STEAL_speedup_vector[i] << ","
+                 << NAIVE_STEAL_speedup_vector[i] << ","
+                 << SMART_STEAL_speedup_vector[i] << "\n";
+    }
+
+    csv_file.close();
 }
 
 
@@ -317,6 +420,10 @@ int main(int argc, char **argv) {
     };
 
 
+    std::vector<size_t> num_workers_range;
+    for (size_t i = 1; i <= num_workers; ++i) {
+        num_workers_range.push_back(i);
+    }
 
     // ---------------------------------------------------------------------------------------------------
     // Application 1: Count Hamiltonian paths
@@ -336,15 +443,26 @@ int main(int argc, char **argv) {
 
     int reduce_init_Hamiltonian = 0;
 
-    run_test_case(
+    plot_test_case(
         "Application 1: Count Hamiltonian paths",
-        num_workers,
         num_iterations,
         seeds,
         successors,
         map_function_Hamiltonian,
         reduce_function_Hamiltonian,
-        reduce_init_Hamiltonian );
+        reduce_init_Hamiltonian,
+        num_workers_range
+        );
+
+    // run_test_case(
+    //     "Application 1: Count Hamiltonian paths",
+    //     num_workers,
+    //     num_iterations,
+    //     seeds,
+    //     successors,
+    //     map_function_Hamiltonian,
+    //     reduce_function_Hamiltonian,
+    //     reduce_init_Hamiltonian );
 
 
 
@@ -365,13 +483,13 @@ int main(int argc, char **argv) {
 
     int reduce_init_Longest = -1;
 
-    run_test_case(
-        "Application 2: find the longest simple path between two nodes",
-        num_workers,
-        num_iterations,
-        seeds,
-        successors,
-        map_function_Longest,
-        reduce_function_Longest,
-        reduce_init_Longest );
+    // run_test_case(
+    //     "Application 2: find the longest simple path between two nodes",
+    //     num_workers,
+    //     num_iterations,
+    //     seeds,
+    //     successors,
+    //     map_function_Longest,
+    //     reduce_function_Longest,
+    //     reduce_init_Longest );
 }
