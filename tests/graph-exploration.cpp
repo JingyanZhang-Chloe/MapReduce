@@ -3,6 +3,7 @@
 //
 
 #include <Master.hpp>
+#include <RecursivelyEnumeratedSet.hpp>
 #include <iostream>
 
 #include <vector>
@@ -10,6 +11,7 @@
 #include <functional>
 #include <algorithm>
 #include <string>
+#include <limits>
 
 #include <cstdint>
 #include <cstdlib>
@@ -83,6 +85,8 @@ struct std::hash<PartialPath>
         for (int node: my_path.path) {
             hash_value ^= static_cast<size_t>(node) + 0x9e3779b9 + (hash_value << 6) + (hash_value >> 2);
         }
+
+        return hash_value;
     }
 };
 
@@ -111,6 +115,134 @@ public:
         return V.size();
     }
 };
+
+
+std::string steal_style_name(int style) {
+    switch (style) {
+        case NO_STEAL: return "NO_STEAL";
+        case NAIVE_STEAL: return "NAIVE_STEAL";
+        case SMART_STEAL: return "SMART_STEAL";
+        default: return "UNKNOWN";
+    }
+}
+
+
+template<typename U, typename A>
+void run_test_case(
+    const std::string& test_name,
+    size_t num_workers,
+    int num_iterations,
+    const std::vector<U>& seeds,
+    std::function<std::vector<U>(const U&)> successors,
+    std::function<A(const U&)> map_function,
+    std::function<A(const A&, const A&)> reduce_function,
+    A reduce_init
+) {
+    std::cout << "\n------------ " << test_name << " ------------" << std::endl;
+
+    // we make this expected value, for every run in each method, we check if we get a diff result, if so raise
+    A expected = reduce_init;
+
+    // ------------------------------------------------------------
+    // Sequential
+
+    long long total_sequential_time = 0;
+    long long best_sequential_time = std::numeric_limits<long long>::max();
+
+    for (int iter = 0; iter < num_iterations; iter++) {
+        RESetMapReduce<U, A> sequential(seeds, successors);
+
+        auto start = std::chrono::steady_clock::now();
+
+        A result = sequential.map_reduce_avoid_duplicate(
+            map_function,
+            reduce_function,
+            reduce_init
+        );
+
+        auto finish = std::chrono::steady_clock::now();
+
+        long long elapsed = std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count();
+
+        total_sequential_time += elapsed;
+        best_sequential_time = std::min(best_sequential_time, elapsed);
+
+        if (iter == 0) {
+            // store the result first
+            expected = result;
+        } else if (result != expected) {
+            throw std::logic_error("Sequential result changed between iterations");
+        }
+    }
+
+    double average_sequential_time = static_cast<double>(total_sequential_time) / num_iterations;
+
+    std::cout << "Sequential average time: " << average_sequential_time << " μs" << std::endl;
+    std::cout << "Sequential best time:    " << best_sequential_time << " μs" << std::endl;
+
+    // ------------------------------------------------------------
+    // Parallel for all stealing strategies
+
+    std::vector<int> steal_styles = {
+        NO_STEAL,
+        NAIVE_STEAL,
+        SMART_STEAL
+    };
+
+    for (int steal_style : steal_styles) {
+        long long total_parallel_time = 0;
+        long long best_parallel_time = std::numeric_limits<long long>::max();
+
+        for (int iter = 0; iter < num_iterations; iter++) {
+            Master<U, A> master(
+                num_workers,
+                seeds,
+                successors,
+                map_function,
+                reduce_function,
+                reduce_init,
+                steal_style
+            );
+
+            auto start = std::chrono::steady_clock::now();
+
+            A result = master.run();
+
+            auto finish = std::chrono::steady_clock::now();
+
+            long long elapsed = std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count();
+
+            total_parallel_time += elapsed;
+            best_parallel_time = std::min(best_parallel_time, elapsed);
+
+            if (result != expected) {
+                throw std::logic_error(
+                    "Results mismatch in " + test_name +
+                    " with " + steal_style_name(steal_style)
+                );
+            }
+        }
+
+        double average_parallel_time =
+            static_cast<double>(total_parallel_time) / num_iterations;
+
+        double average_speedup =
+            average_sequential_time / average_parallel_time;
+
+        double best_speedup =
+            static_cast<double>(best_sequential_time) /
+            static_cast<double>(best_parallel_time);
+
+        std::cout << "\nMode: " << steal_style_name(steal_style) << std::endl;
+        std::cout << "Average time: " << average_parallel_time << " μs" << std::endl;
+        std::cout << "Best time:    " << best_parallel_time << " μs" << std::endl;
+        std::cout << "Average speedup: " << average_speedup << "x" << std::endl;
+        std::cout << "Best speedup:    " << best_speedup << "x" << std::endl;
+    }
+
+    // if we reach here means all results match
+    std::cout << "TEST PASSSSSSSSSS" << std::endl;
+}
 
 
 int main(int argc, char **argv) {
@@ -162,6 +294,7 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    int num_iterations = 5;
 
     std::vector<PartialPath> seeds = {PartialPath(begin, {begin})};
 
@@ -183,7 +316,6 @@ int main(int argc, char **argv) {
         return next_paths;
     };
 
-    std::vector<PartialPath> extended_seeds = successors(PartialPath(begin, {begin}));
 
 
     // ---------------------------------------------------------------------------------------------------
@@ -203,25 +335,19 @@ int main(int argc, char **argv) {
     };
 
     int reduce_init_Hamiltonian = 0;
-    int steal_style_Hamiltonian = NO_STEAL;
 
-    Master<PartialPath, int> master_Hamiltonian(
+    run_test_case(
+        "Application 1: Count Hamiltonian paths",
         num_workers,
-        extended_seeds,
+        num_iterations,
+        seeds,
         successors,
         map_function_Hamiltonian,
         reduce_function_Hamiltonian,
-        reduce_init_Hamiltonian,
-        steal_style_Hamiltonian
-    );
+        reduce_init_Hamiltonian );
 
-    auto start = std::chrono::steady_clock::now();
-    int number_hamiltonian_paths = master_Hamiltonian.run();
-    auto finish = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count();
-    std::cout << elapsed << " μs" << std::endl;
 
-    std::cout << "Number of Hamiltonian paths: " << number_hamiltonian_paths << std::endl;
+
 
     // ---------------------------------------------------------------------------------------------------
     // Application 2: find the longest simple path between two nodes
@@ -238,23 +364,14 @@ int main(int argc, char **argv) {
     };
 
     int reduce_init_Longest = -1;
-    int steal_style_Longest = NO_STEAL;
 
-    Master<PartialPath, int> master_Longest(
+    run_test_case(
+        "Application 2: find the longest simple path between two nodes",
         num_workers,
-        extended_seeds,
+        num_iterations,
+        seeds,
         successors,
         map_function_Longest,
         reduce_function_Longest,
-        reduce_init_Longest,
-        steal_style_Longest
-    );
-
-    auto start2 = std::chrono::steady_clock::now();
-    int longest_path_length = master_Longest.run();
-    auto finish2 = std::chrono::steady_clock::now();
-    auto elapsed2 = std::chrono::duration_cast<std::chrono::microseconds>(finish2 - start2).count();
-    std::cout << elapsed2 << " μs" << std::endl;
-
-    std::cout << "Longest path length: " << longest_path_length << std::endl;
+        reduce_init_Longest );
 }
