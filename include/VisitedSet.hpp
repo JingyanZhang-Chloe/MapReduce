@@ -15,7 +15,7 @@
 template<typename U>
 class VisitedSet {
 private:
-    static constexpr size_t NUM_GROUPS = 32; // more than workers
+    static constexpr size_t NUM_GROUPS = 64; // more than workers
 
     // XXX change to class with dedicated methods??
     struct NodeGroup {
