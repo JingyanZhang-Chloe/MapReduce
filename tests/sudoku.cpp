@@ -337,8 +337,8 @@ void count_solutions(Config config) {
             int candidate = rand() % 81;
             if (std::find(positions.begin(), positions.end(), candidate) == positions.end()) positions.push_back(candidate);
         }
-        for (int p : positions) std::cout << p << " ";
-        std::cout << std::endl;
+        // for (int p : positions) std::cout << p << " ";
+        // std::cout << std::endl;
 
         std::string grid_str = full_grid;
         // remove certain numbers
