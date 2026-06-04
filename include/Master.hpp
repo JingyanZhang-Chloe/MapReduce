@@ -21,12 +21,12 @@
 #include "VisitedSet.hpp"
 #include "Worker.hpp"
 
-#include <Logger.h> // uses simple-cpp-logger
-// control logging: compile with "cmake -DNO_LOGS=ON ../" or "cmake -DNO_LOGS=OFF ../"" (after only "cmake .." is enough)
-#ifdef NO_LOGS
-#define LogInfo(...) ((void)0)
-#define LogTrace(...) ((void)0)
-#endif
+// #include <Logger.h> // uses simple-cpp-logger
+// // control logging: compile with "cmake -DNO_LOGS=ON ../" or "cmake -DNO_LOGS=OFF ../"" (after only "cmake .." is enough)
+// #ifdef NO_LOGS
+// #define LogInfo(...) ((void)0)
+// #define LogTrace(...) ((void)0)
+// #endif
 
 
 template<typename U, typename A>
@@ -35,7 +35,6 @@ class Master {
 private:
     const size_t num_workers;
 
-    // TODO: Check if this should be passed separately or by RecursivelyEnumeratedSet,
     const std::vector<U> seeds;
     const std::function<std::vector<U>(const U&)> successors;
 
@@ -77,7 +76,6 @@ private:
 
         for (size_t i = 0; i < num_workers; ++i) {
             // This part check with Worker actual implementation
-            // TODO: check with Worker actual implementation
             size_t worker_id = i % num_workers;
             workers.push_back(
                 std::make_unique<Worker<U,A>>(
@@ -104,7 +102,6 @@ private:
     }
 
     void join_workers() {
-        // TODO : Manually shut down by setting the workers field to false
         for (size_t i = 0; i < this->num_workers; ++i) {
             this->workers[i]->request_shutdown();
             if (this->worker_threads[i].joinable()) {
@@ -289,7 +286,6 @@ public:
         start_workers();
         bool error_happened = false;
 
-        // TODO: Check if shutdown_request needs to be automic
         while (!shutdown_request) {
             std::unique_lock<std::mutex> lock(mutex);
             wake_up_my_master.wait(lock, [this] {
