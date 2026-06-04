@@ -147,7 +147,7 @@ private:
         }
 
         // here the queue is not locked, so probably we could use the num of total workers
-        int steal_amount = best / num_workers;
+        int steal_amount = std::max(1, best / (int)num_workers);
         return std::pair(victim, steal_amount);
     }
 
