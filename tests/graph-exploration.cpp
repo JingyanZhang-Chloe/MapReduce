@@ -31,7 +31,7 @@
 #endif
 
 #define MIN_WORKERS 1
-#define MAX_WORKERS 10
+#define MAX_WORKERS 20
 
 void incorrect_usage() {
     LogInfo("Incorrect usage");
@@ -210,11 +210,36 @@ std::pair<std::vector<double>, std::vector<double>> run_test_case(
     };
 
     for (int steal_style : steal_styles) {
+        // If it is NO STEAL, we compute one round of succ to distribute
+        // Otherwise, since in graph case initial seeds only contain one node,
+        // doesnt really make sense to compare results since only one thread will be working
+
+        std::vector<U> extended_seed;
+        if (steal_style == NO_STEAL) {
+            for (const U& seed : seeds) {
+                std::vector<U> succ = successors(seed);
+                extended_seed.insert(extended_seed.end(), succ.begin(), succ.end());
+            }
+        }
+
         long long total_parallel_time = 0;
         long long best_parallel_time = std::numeric_limits<long long>::max();
 
         for (int iter = 0; iter < num_iterations; iter++) {
-            Master<U, A> master(
+            Master<U, A>* master;
+
+            if (steal_style == NO_STEAL) {
+                master = new Master<U, A>(
+                num_workers,
+                extended_seed,
+                successors,
+                map_function,
+                reduce_function,
+                reduce_init,
+                steal_style
+                );
+            } else {
+                master = new Master<U, A>(
                 num_workers,
                 seeds,
                 successors,
@@ -222,17 +247,18 @@ std::pair<std::vector<double>, std::vector<double>> run_test_case(
                 reduce_function,
                 reduce_init,
                 steal_style
-            );
+                );
+            }
 
             auto start = std::chrono::steady_clock::now();
 
-            A result = master.run();
+            A result = master->run();
 
             auto finish = std::chrono::steady_clock::now();
 
             long long elapsed = std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count();
 
-            size_t visited_set_size_parallel = master.get_visited_set_size();
+            size_t visited_set_size_parallel = master->get_visited_set_size();
             total_parallel_time += elapsed;
             best_parallel_time = std::min(best_parallel_time, elapsed);
 
@@ -242,10 +268,12 @@ std::pair<std::vector<double>, std::vector<double>> run_test_case(
                     " with " + steal_style_name(steal_style)
                 );
             } else if (visited_set_size_parallel != visited_set_size) {
-                throw std::logic_error(
-                    "Visited set size mismatch in " + test_name +
-                    " with " + steal_style_name(steal_style)
-                );
+                if (steal_style != NO_STEAL) {
+                    throw std::logic_error(
+                        "Visited set size mismatch in " + test_name +
+                        " with " + steal_style_name(steal_style)
+                    );
+                }
             }
         }
 
@@ -276,6 +304,7 @@ std::pair<std::vector<double>, std::vector<double>> run_test_case(
 
     return {average_time_vector, average_speedup_vector};
 }
+
 
 template<typename U, typename A>
 void plot_test_case(
@@ -348,6 +377,157 @@ void plot_test_case(
 }
 
 
+Graph make_benchmark_graph(int n) {
+
+    std::vector<int> vertices;
+    std::vector<std::pair<int,int>> edges;
+
+    for (int i = 0; i < n; ++i) {
+        vertices.push_back(i);
+    }
+
+    // the longest path
+    for (int i = 0; i + 1 < n; ++i) {
+        edges.push_back({i, i + 1});
+    }
+
+    // length-5 shortcuts
+    for (int i = 0; i + 5 < n; ++i) {
+        edges.push_back({i, i + 5});
+    }
+
+    // length-10 shortcuts
+    for (int i = 0; i + 10 < n; i += 2) {
+        edges.push_back({i, i + 10});
+    }
+
+    // length-12 shortcuts
+    for (int i = 3; i + 12 < n; i += 2) {
+        edges.push_back({i, i + 12});
+    }
+
+    // length-15 shortcuts
+    for (int i = 3; i + 15 < n; i += 2) {
+        edges.push_back({i, i + 15});
+    }
+
+    return Graph(vertices, edges);
+}
+
+
+int main_benchmark(int argc, char **argv) {
+    if (argc < 2) {
+        incorrect_usage();
+        return 0;
+    }
+
+    size_t num_workers;
+    try {
+        num_workers = std::stoi(argv[1]);
+    } catch(...) {
+        incorrect_usage();
+        return 0;
+    }
+
+    if (num_workers < MIN_WORKERS || num_workers > MAX_WORKERS) {
+        incorrect_usage();
+        return 0;
+    }
+
+    std::vector<int> ns = {10, 20, 30, 40, 50};
+
+    for (int n : {30}) {
+        Graph graph = make_benchmark_graph(n);
+        int begin = 0;
+        int end = n-1;
+
+        int num_iterations = 10;
+
+        std::vector<PartialPath> seeds = {PartialPath(begin, {begin})};
+
+        std::function<std::vector<PartialPath>(const PartialPath&)> successors = [graph, end](const PartialPath& current_path) {
+            std::vector<PartialPath> next_paths;
+
+            if (current_path.current_node == end) {
+                return next_paths;
+            }
+
+            for (int next_node : graph.get_neighbors(current_path.current_node)) {
+                if (!current_path.has_visited(next_node)) {
+                    // we could extend this next node so that we have one next_path
+                    PartialPath next_path = current_path.extend_with(next_node);
+                    next_paths.push_back(next_path);
+                }
+            }
+
+            return next_paths;
+        };
+
+
+        std::vector<size_t> num_workers_range;
+        for (size_t i = 1; i <= num_workers; i=i+2) {
+            num_workers_range.push_back(i);
+        }
+
+        // ---------------------------------------------------------------------------------------------------
+        // Application 1: Count Hamiltonian paths
+        // Here A is int, we want to return the num of paths that are Hamiltonian
+        std::function<int(const PartialPath&)> map_function_Hamiltonian = [n, end](const PartialPath& current_path) {
+            if (current_path.path.size() == n && current_path.current_node == end) {
+                // since we make sure theres no revisiting, this implies the path is H
+                return 1;
+            } else {
+                return 0;
+            }
+        };
+
+        std::function<int(const int&, const int&)> reduce_function_Hamiltonian = [](const int& a, const int& b) -> int {
+            return a + b;
+        };
+
+        int reduce_init_Hamiltonian = 0;
+
+        plot_test_case(
+            "Application 1: Count Hamiltonian paths",
+            num_iterations,
+            seeds,
+            successors,
+            map_function_Hamiltonian,
+            reduce_function_Hamiltonian,
+            reduce_init_Hamiltonian,
+            num_workers_range
+            );
+
+        // ---------------------------------------------------------------------------------------------------
+        // Application 2: find the longest simple path between two nodes
+        std::function<int(const PartialPath&)> map_function_Longest = [end](const PartialPath& current_path) -> int {
+            if (current_path.current_node == end) {
+                return static_cast<int>(current_path.path.size()) - 1; // we count the number of edges
+            }
+
+            return -1; // this path otherwise is not validdd
+        };
+
+        std::function<int(const int&, const int&)> reduce_function_Longest = [](const int& a, const int& b) -> int {
+            return std::max(a, b);
+        };
+
+        int reduce_init_Longest = -1;
+
+        // plot_test_case(
+        //     "Application 2: Finding the Longest Simple Path",
+        //     num_iterations,
+        //     seeds,
+        //     successors,
+        //     map_function_Longest,
+        //     reduce_function_Longest,
+        //     reduce_init_Longest,
+        //     num_workers_range
+        //     );
+    }
+}
+
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         incorrect_usage();
@@ -382,7 +562,7 @@ int main(int argc, char **argv) {
     size_t n = graph.get_num_vertices();
 
     int begin = 0;
-    int end = 12;
+    int end = 29;
 
     size_t num_workers;
     try {
@@ -397,7 +577,7 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    int num_iterations = 5;
+    int num_iterations = 10;
 
     std::vector<PartialPath> seeds = {PartialPath(begin, {begin})};
 
@@ -443,16 +623,16 @@ int main(int argc, char **argv) {
 
     int reduce_init_Hamiltonian = 0;
 
-    plot_test_case(
-        "Application 1: Count Hamiltonian paths",
-        num_iterations,
-        seeds,
-        successors,
-        map_function_Hamiltonian,
-        reduce_function_Hamiltonian,
-        reduce_init_Hamiltonian,
-        num_workers_range
-        );
+    // plot_test_case(
+    //     "Application 1: Count Hamiltonian paths",
+    //     num_iterations,
+    //     seeds,
+    //     successors,
+    //     map_function_Hamiltonian,
+    //     reduce_function_Hamiltonian,
+    //     reduce_init_Hamiltonian,
+    //     num_workers_range
+    //     );
 
     // run_test_case(
     //     "Application 1: Count Hamiltonian paths",
@@ -483,6 +663,17 @@ int main(int argc, char **argv) {
 
     int reduce_init_Longest = -1;
 
+    plot_test_case(
+        "Application 2: Finding the Longest Simple Path",
+        num_iterations,
+        seeds,
+        successors,
+        map_function_Longest,
+        reduce_function_Longest,
+        reduce_init_Longest,
+        num_workers_range
+        );
+
     // run_test_case(
     //     "Application 2: find the longest simple path between two nodes",
     //     num_workers,
@@ -492,4 +683,8 @@ int main(int argc, char **argv) {
     //     map_function_Longest,
     //     reduce_function_Longest,
     //     reduce_init_Longest );
+
+
+    // ---------------------------------------------------------------------------------------------------
+    // Benchmark diff graph size
 }
