@@ -4,22 +4,22 @@
 
 #include "Master.hpp"
 #include "Worker.hpp"
+#include "RecursivelyEnumeratedSet.hpp"
 
-#include <Logger.h> // uses simple-cpp-logger
-// control logging: compile with "cmake -DNO_LOGS=ON ../" or "cmake -DNO_LOGS=OFF ../"" (after only "cmake .." is enough)
-#ifdef NO_LOGS
-#define LogInfo(...) ((void)0)
-#endif
+// #include <Logger.h> // uses simple-cpp-logger
+// // control logging: compile with "cmake -DNO_LOGS=ON ../" or "cmake -DNO_LOGS=OFF ../"" (after only "cmake .." is enough)
+// #ifdef NO_LOGS
+// #define LogInfo(...) ((void)0)
+// #endif
 
 #define MIN_WORKERS 1
-#define MAX_WORKERS 10
+#define MAX_WORKERS 20
 
 #define RED     "\033[31m"
 #define GREEN   "\033[32m"
 #define RESET   "\033[0m"
 
 void incorrect_usage() {
-    LogInfo("Incorrect usage");
     std::cout << "Usage: ./CSE305_project <num_workers>" << std::endl;
     std::cout << "(at least " << MIN_WORKERS << " and at most " << MAX_WORKERS << " workers can be used)" << std::endl;
 }
@@ -88,45 +88,96 @@ void validation_test(size_t num_workers) {
         return res;
     };
 
-    // Test on cardinal_map
-    // Create a Master
-    // types: U = int; A = int
-    int steal_style_cardinal = NO_STEAL;
-    Master<int, int> master1(num_workers, combs35_seeds, combs35_successors, cardinal_map, cardinal_reduce, cardinal_reduce_init, steal_style_cardinal);
-    int master1_res = master1.run();
-    if (cardinal_result == master1_res) {
-        LogInfo(GREEN "[Success] Result -- expected %i and got %i" RESET, cardinal_result, master1_res);
+    std::cout << "Set: linear combinations of 3 and 5 between 0 and 30" << std::endl;
+
+    // sequential
+    std::cout << "SEQUENTIAL TEST" << std::endl;
+    // cardinality
+    std::cout << "Compute cardinality..." << std::endl;
+    RESetMapReduce<int, int> re_set1(combs35_seeds, combs35_successors);
+    int re_set1_res = re_set1.map_reduce_avoid_duplicate(cardinal_map, cardinal_reduce, cardinal_reduce_init);
+    if (cardinal_result == re_set1_res) {
+        std::cout << GREEN "[Success]" RESET << " Result -- expected " << cardinal_result << " and got " << re_set1_res << std::endl;
     } else {
-        LogInfo(RED "[Fail] Result -- expected %i and got %i" RESET, cardinal_result, master1_res);
+        std::cout << RED "[Fail]" RESET << " Result -- expected " << cardinal_result << " and got " << re_set1_res << std::endl;
+    }
+    // even
+    std::cout << "Count even numbers..." << std::endl;
+    RESetMapReduce<int, int> re_set2(combs35_seeds, combs35_successors);
+    int re_set2_res = re_set2.map_reduce_avoid_duplicate(even_count_map, even_count_reduce, even_count_reduce_init);
+    if (even_count_result == re_set2_res) {
+        std::cout << GREEN "[Success]" RESET << " Result -- expected " << even_count_result << " and got " << re_set2_res << std::endl;
+    } else {
+        std::cout << RED "[Fail]" RESET << " Result -- expected " << even_count_result << " and got " << re_set2_res << std::endl;
+    }
+    // max
+    std::cout << "Compute maximum..." << std::endl;
+    RESetMapReduce<int, int> re_set3(combs35_seeds, combs35_successors);
+    int re_set3_res = re_set3.map_reduce_avoid_duplicate(max_map, max_reduce, max_reduce_init);
+    if (max_result == re_set3_res) {
+        std::cout << GREEN "[Success]" RESET << " Result -- expected " << max_result << " and got " << re_set3_res << std::endl;
+    } else {
+        std::cout << RED "[Fail]" RESET << " Result -- expected " << max_result << " and got " << re_set3_res << std::endl;
+    }
+    // all even
+    std::cout << "Check whether all numbers are even..." << std::endl;
+    RESetMapReduce<int, bool> re_set4(combs35_seeds, combs35_successors);
+    bool re_set4_res = re_set4.map_reduce_avoid_duplicate(all_even_map, all_even_reduce, all_even_reduce_init);
+    if (all_even_result == re_set4_res) {
+        std::cout << GREEN "[Success]" RESET << " Result -- expected " << all_even_result << " and got " << re_set4_res << std::endl;
+    } else {
+        std::cout << RED "[Fail]" RESET << " Result -- expected " << all_even_result << " and got " << re_set4_res << std::endl;
     }
 
-    // Test on even_count_map
-    int steal_style_even_count = NO_STEAL;
-    Master<int, int> master2(num_workers, combs35_seeds, combs35_successors, even_count_map, even_count_reduce, even_count_reduce_init, steal_style_even_count);
-    int master2_res = master2.run();
-    if (even_count_result == master2_res) {
-        LogInfo(GREEN "[Success] Result -- expected %i and got %i" RESET, even_count_result, master2_res);
-    } else {
-        LogInfo(RED "[Fail] Result -- expected %i and got %i" RESET, even_count_result, master2_res);
-    }
+    std::vector<int> steal_types = {NO_STEAL, NAIVE_STEAL, SMART_STEAL};
+    std::vector<std::string> steal_types_str = {"NO WS TEST", "NAIVE WS TEST", "SMART WS TEST"};
 
-    // Test on max_map
-    int steal_style_max = NO_STEAL;
-    Master<int, int> master3(num_workers, combs35_seeds, combs35_successors, max_map, max_reduce, max_reduce_init, steal_style_max);
-    int master3_res = master3.run();
-    if (max_result == master3_res) {
-        LogInfo(GREEN "[Success] Result -- expected %i and got %i" RESET, max_result, master3_res);
-    } else {
-        LogInfo(RED "[Fail] Result -- expected %i and got %i" RESET, max_result, master3_res);
-    }
+    for (int i = 0; i < steal_types.size(); ++i) {
+        std::cout << "--------------------" << std::endl;
+        std::cout << steal_types_str[i] << std::endl;
 
-    // Test on all_even_map
-    int steal_style_all_even = NO_STEAL;
-    Master<int, int> master4(num_workers, combs35_seeds, combs35_successors, all_even_map, all_even_reduce, all_even_reduce_init, steal_style_all_even);
-    int master4_res = master4.run();
-    if (all_even_result == master4_res) {
-        LogInfo(GREEN "[Success] Result -- expected %i and got %i" RESET, all_even_result, master4_res);
-    } else {
-        LogInfo(RED "[Fail] Result -- expected %i and got %i" RESET, all_even_result, master4_res);
+        int steal_type = steal_types[i];
+
+        // Test on cardinal_map
+        std::cout << "Compute cardinality..." << std::endl;
+        // Create a Master
+        // types: U = int; A = int
+        Master<int, int> master1(num_workers, combs35_seeds, combs35_successors, cardinal_map, cardinal_reduce, cardinal_reduce_init, steal_type);
+        int master1_res = master1.run();
+        if (cardinal_result == master1_res) {
+            std::cout << GREEN "[Success]" RESET << " Result -- expected " << cardinal_result << " and got " << master1_res << std::endl;
+        } else {
+            std::cout << RED "[Fail]" RESET << " Result -- expected " << cardinal_result << " and got " << master1_res << std::endl;
+        }
+
+        // Test on even_count_map
+        std::cout << "Count even numbers..." << std::endl;
+        Master<int, int> master2(num_workers, combs35_seeds, combs35_successors, even_count_map, even_count_reduce, even_count_reduce_init, steal_type);
+        int master2_res = master2.run();
+        if (even_count_result == master2_res) {
+            std::cout << GREEN "[Success]" RESET << " Result -- expected " << even_count_result << " and got " << master2_res << std::endl;
+        } else {
+            std::cout << RED "[Fail]" RESET << " Result -- expected " << even_count_result << " and got " << master2_res << std::endl;
+        }
+
+        // Test on max_map
+        std::cout << "Compute maximum..." << std::endl;
+        Master<int, int> master3(num_workers, combs35_seeds, combs35_successors, max_map, max_reduce, max_reduce_init, steal_type);
+        int master3_res = master3.run();
+        if (max_result == master3_res) {
+            std::cout << GREEN "[Success]" RESET << " Result -- expected " << max_result << " and got " << master3_res << std::endl;
+        } else {
+            std::cout << RED "[Fail]" RESET << " Result -- expected " << max_result << " and got " << master3_res << std::endl;
+        }
+
+        // Test on all_even_map
+        std::cout << "Check whether all numbers are even..." << std::endl;
+        Master<int, int> master4(num_workers, combs35_seeds, combs35_successors, all_even_map, all_even_reduce, all_even_reduce_init, steal_type);
+        int master4_res = master4.run();
+        if (all_even_result == master4_res) {
+            std::cout << GREEN "[Success]" RESET << " Result -- expected " << all_even_result << " and got " << master4_res << std::endl;
+        } else {
+            std::cout << RED "[Fail]" RESET << " Result -- expected " << all_even_result << " and got " << master4_res << std::endl;
+        }
     }
 }

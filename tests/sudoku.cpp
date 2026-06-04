@@ -12,7 +12,7 @@
 // #endif
 
 #define MIN_WORKERS 1
-#define MAX_WORKERS 10
+#define MAX_WORKERS 50
 
 #define RED     "\033[31m"
 #define GREEN   "\033[32m"
@@ -206,12 +206,13 @@ struct std::hash<Sudoku> {
 };
 
 void incorrect_usage() {
-    std::cout << "Usage: ./sudoku_test <number of workers> [-blanks <number of empty cells>] [-seq] [-noseq] [-steal <steal type>]" << std::endl;
-    std::cout << "  Default: the \"count number of solutions\" test is executed sequentially and in parallel with each work-stealing type on a sudoku with 10 empty cells" << std::endl;
+    std::cout << "Usage: ./sudoku_test <number of workers> [-once] [-blanks <number of empty cells>] [-seq] [-noseq] [-steal <steal type>]" << std::endl;
+    std::cout << "  Default: the \"count number of solutions\" test is executed 5 times for 5 puzzles sequentially and in parallel with each work-stealing type on a sudoku with 10 empty cells" << std::endl;
     std::cout << "  Argument sepcifications:" << std::endl;
     std::cout << "    - at least " << MIN_WORKERS << " and at most " << MAX_WORKERS << " workers can be used" << std::endl;
+    std::cout << "    - \"-once\" runs a single test on a single puzzle (rather than 25 tests total)" << std::endl;
     std::cout << "    - number of empty cellc should be at most " << 20 << " (over 14 not recommended for sequential program)" << std::endl;
-    std::cout << "    - \"-seq\" will run the sequential algorithm" << std::endl;
+    std::cout << "    - \"-seq\" will run the sequential algorithm (dummy number of workers still needed)" << std::endl;
     std::cout << "    - \"-noseq\" will run all but the sequential algorithm" << std::endl;
     std::cout << "    - steal type (incompatible with \"-seq\") should be 0 (no work-stealing), 1 (naive work-stealing), or 2 (smart work-stealing)" << std::endl;
 }
@@ -219,6 +220,7 @@ void incorrect_usage() {
 struct Config {
     int num_workers;
     // fill with default values
+    bool once = false;
     int blanks = 10;
     bool test_seq_only = false;
     bool test_seq = true;
@@ -236,6 +238,10 @@ Config parse_args(int argc, char** argv) {
     // number of workers
     try {
         config.num_workers = std::stoi(argv[1]);
+        if (config.num_workers > MAX_WORKERS || config.num_workers < MIN_WORKERS) {
+            incorrect_usage();
+            throw std::runtime_error("Invalid number of workers");
+        }
     } catch (...) {
         incorrect_usage();
         throw std::runtime_error("Invalid number of workers");
@@ -247,7 +253,10 @@ Config parse_args(int argc, char** argv) {
         std::string arg = argv[i];
 
         // check each possible argument
-        if (arg == "-seq") {
+        if (arg == "-once") {
+            config.once = true;
+            ++i;
+        } else if (arg == "-seq") {
             config.test_seq_only = true;
             ++i;
         } else if (arg == "-blanks") {
@@ -347,7 +356,8 @@ void count_solutions(Config config) {
     std::vector<size_t> search_space{};
     std::vector<int64_t> time_seq{};
     std::vector<std::vector<int64_t>> time_par(3);
-    for (int j = 0; j < N_ITERS * full_grids.size(); ++j) {
+    int bound = config.once ? 1 : N_ITERS * full_grids.size();
+    for (int j = 0; j < bound; ++j) {
         int i = j % full_grids.size();
 
         //std::vector<Sudoku> seeds = {sudoku};
@@ -441,7 +451,7 @@ void count_solutions(Config config) {
     if (config.steal_type != -1) {
         uint64_t sum = 0;
         for (uint64_t t : time_par[config.steal_type]) sum += t;
-        std::cout << "Parallel with " << steal_name[config.steal_type] << " work-stealing average time: " << sum / time_par[config.steal_type].size() << std::endl;
+        std::cout << "Parallel with " << steal_name[config.steal_type] << " work-stealing average time (μs): " << sum / time_par[config.steal_type].size() << std::endl;
         return;
     }
 
@@ -449,7 +459,7 @@ void count_solutions(Config config) {
         // sequential results
         uint64_t sum = 0;
         for (uint64_t t : time_seq) sum += t;
-        std::cout << "Sequential average time: " << sum / time_seq.size() << std::endl;
+        std::cout << "Sequential average time (μs): " << sum / time_seq.size() << std::endl;
     }
     
     // all parallel results
@@ -457,7 +467,7 @@ void count_solutions(Config config) {
         for (int i = 0; i < 3; ++i) {
             uint64_t sum = 0;
             for (uint64_t t : time_par[i]) sum += t;
-            std::cout << "Parallel with " << steal_name[i] << " work-stealing average time: " << sum / time_par[i].size() << std::endl;
+            std::cout << "Parallel with " << steal_name[i] << " work-stealing average time (μs): " << sum / time_par[i].size() << std::endl;
         }
     }
 }

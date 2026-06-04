@@ -21,6 +21,8 @@
 #define NAIVE_STEAL 1
 #define SMART_STEAL 2
 
+#define STEAL_THRESHOLD 2 // no stealing from workers with <=steal_threshold tasks
+
 template<typename U, typename A>
 class Master;
 
@@ -58,8 +60,6 @@ private:
     
     bool shutdown_request;
 
-    int steal_threshold; // no stealing from workers with <=steal_threshold tasks
-    int max_n_steal; // number of tasks to steal at a time
     std::function<std::optional<U>()> steal; // the steal function to use
     std::condition_variable victim_found;
     std::optional<size_t> provided_victim_id;
@@ -250,10 +250,7 @@ public:
         result(master_->get_reduce_init()),
         shutdown_request(false),
         num_tasks(num_tasks_),
-        provided_victim_id(my_id_),
-        // FIXME take these from master
-        steal_threshold(2),
-        max_n_steal(5)
+        provided_victim_id(my_id_)
     {
         // initiate the tasks queue
         tasks = std::deque<U>(tasks_.begin(), tasks_.end());
@@ -321,7 +318,7 @@ public:
         std::lock_guard<std::mutex> tl(tasks_lock);
         std::vector<U> stolen; // returned empty if stealing is unsuccessful
 
-        if (tasks.size() > steal_threshold) {
+        if (tasks.size() > STEAL_THRESHOLD) {
             // steal as many tasks as said by master OR try stealing 1/num_workers of all tasks
             int num_steal = maybe_num_steal.value_or(std::max<int>(1, (int)tasks.size() / num_workers));
 

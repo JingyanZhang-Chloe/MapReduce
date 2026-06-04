@@ -3,16 +3,8 @@ project(CSE305_project)
 
 set(CMAKE_CXX_STANDARD 20)
 
-if(NO_LOGS)
-    add_compile_definitions(NO_LOGS)
-endif()
-
-add_executable(CSE305_project
+add_executable(basic_test
         main.cpp
-        src/Master.cpp
-        src/Worker.cpp
-        src/VisitedSet.cpp
-        src/RecursivelyEnumeratedSet.cpp
 )
 
 add_executable(graph_exploration_test
@@ -23,17 +15,14 @@ add_executable(sudoku_test
         tests/sudoku.cpp
 )
 
-target_include_directories(CSE305_project PRIVATE
+target_include_directories(basic_test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/simple-cpp-logger/include
 )
 
 target_include_directories(graph_exploration_test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/simple-cpp-logger/include
 )
 
 target_include_directories(sudoku_test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/simple-cpp-logger/include
 )
