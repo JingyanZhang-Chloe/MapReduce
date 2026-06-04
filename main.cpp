@@ -20,7 +20,7 @@
 #define RESET   "\033[0m"
 
 void incorrect_usage() {
-    std::cout << "Usage: ./CSE305_project <num_workers>" << std::endl;
+    std::cout << "Usage: ./basic_test <num_workers>" << std::endl;
     std::cout << "(at least " << MIN_WORKERS << " and at most " << MAX_WORKERS << " workers can be used)" << std::endl;
 }
 
