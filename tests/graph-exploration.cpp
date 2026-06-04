@@ -45,7 +45,6 @@ void incorrect_usage() {
     std::cout << "    - \"-benchmark\" (default false) put this if you want to run benchmarks on different graph sizes. If putting true, please also specify the graph size you want to run on" << std::endl;
     std::cout << "    - \"-testH\" (default false) put this if you want to run the first application: Counting Hamiltonian Paths" << std::endl;
     std::cout << "    - \"-testL\" (default false) put this if you want to run the second application: Finding the Longest Simple Path" << std::endl;
-    std::cout << "    - \"-steal\" steal type should be 0 (no work-stealing), 1 (naive work-stealing), or 2 (smart work-stealing)" << std::endl;
 }
 
 
@@ -65,6 +64,7 @@ Config parse_args(int argc, char** argv) {
     }
 
     Config config;
+    bool has_test = false;
 
     // number of workers
     try {
@@ -96,13 +96,19 @@ Config parse_args(int argc, char** argv) {
         } else if (arg == "-testH") {
             config.test_Hamiltonian = true;
             ++i;
+            has_test = true;
         } else if (arg == "-testL") {
             config.test_Longest = true;
             ++i;
+            has_test = true;
         } else {
             incorrect_usage();
             throw std::runtime_error("Invalid inputs");
         }
+    }
+
+    if (!has_test) {
+        throw std::runtime_error("No test running required. Consider putting -testH for testing Application 1 Hamiltonian, or putting -testL for testing Application 2 Longest path");
     }
 
     return config;
